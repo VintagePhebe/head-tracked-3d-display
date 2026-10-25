@@ -15,7 +15,7 @@ import {
 } from '../config/config';
 import type { DesktopCaptureStats, DesktopDisplaySource } from '../desktop/desktopCapture';
 import type { DesktopRaycastHit } from '../desktop/desktopCoordinates';
-import { listCameras, type CameraDevice } from '../tracking/camera';
+import { isVirtualCamera, listCameras, type CameraDevice } from '../tracking/camera';
 import type { TrackerStatus } from '../tracking/faceTracker';
 
 export interface HudCallbacks {
@@ -26,6 +26,7 @@ export interface HudCallbacks {
   setTrackingEnabled(enabled: boolean): void;
   isTrackingEnabled(): boolean;
   getTrackerStatus(): TrackerStatus;
+  getActiveCameraLabel(): string;
   openCalibration(): void;
   toggleFullscreen(): void;
   resetMouseEye(): void;
@@ -176,9 +177,11 @@ export class AppHud {
       cfg.desktop.interactionEnabled &&
       cfg.desktop.interactionMode === 'desktop';
 
+    const camLabel = this.cb.getActiveCameraLabel();
+    const shortCam = camLabel ? ` · ${camLabel.length > 22 ? camLabel.slice(0, 20) + '…' : camLabel}` : '';
     const statusBadge =
       status === 'running' && tracking
-        ? `<span class="vw-status ok">● Head Tracking</span>`
+        ? `<span class="vw-status ok" title="${camLabel}">● Head Tracking${shortCam}</span>`
         : status === 'loading-model' || status === 'starting'
           ? `<span class="vw-status warn">◌ Starting Camera…</span>`
           : `<span class="vw-status sim">◎ Mouse Sim (${isDeskMode ? 'Alt+Move' : 'scroll = Z'})</span>`;
@@ -252,9 +255,10 @@ export class AppHud {
     const cfg = this.cb.getConfig();
     const isCustom = cfg.webcam.mount === 'custom';
     const camOptions = [
-      `<option value="" ${cfg.webcam.deviceId === '' ? 'selected' : ''}>Default Webcam</option>`,
+      `<option value="" ${cfg.webcam.deviceId === '' ? 'selected' : ''}>Default Physical Webcam</option>`,
       ...this.cameras.map(
-        (d) => `<option value="${d.deviceId}" ${cfg.webcam.deviceId === d.deviceId ? 'selected' : ''}>${d.label}</option>`,
+        (d) =>
+          `<option value="${d.deviceId}" ${cfg.webcam.deviceId === d.deviceId ? 'selected' : ''}>${d.label}${isVirtualCamera(d.label) ? ' [Virtual]' : ''}</option>`,
       ),
     ].join('');
 
@@ -303,8 +307,8 @@ export class AppHud {
             <label>Mode Shortcut
               <select id="set-desk-short">
                 <option value="Alt+Shift+D" ${cfg.desktop.shortcut === 'Alt+Shift+D' ? 'selected' : ''}>Alt+Shift+D</option>
-                <option value="F8" ${cfg.desktop.shortcut === 'F8' ? 'selected' : ''}>F8</option>
                 <option value="Ctrl+Shift+D" ${cfg.desktop.shortcut === 'Ctrl+Shift+D' ? 'selected' : ''}>Ctrl+Shift+D</option>
+                <option value="Alt+Shift+M" ${cfg.desktop.shortcut === 'Alt+Shift+M' ? 'selected' : ''}>Alt+Shift+M</option>
               </select>
             </label>
             <label>Width Scale (${Math.round(cfg.desktop.widthScale * 100)}%)

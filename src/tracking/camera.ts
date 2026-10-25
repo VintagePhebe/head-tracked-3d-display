@@ -36,6 +36,12 @@ export interface CameraDevice {
   label: string;
 }
 
+const VIRTUAL_CAM_RE = /\b(virtual|obs|bytecast|camo|manycam|snap camera|xsplit|vmix|droidcam|iriun|epoccam|ndi)\b/i;
+
+export function isVirtualCamera(label: string): boolean {
+  return VIRTUAL_CAM_RE.test(label || '');
+}
+
 type MediaDevicesLike = Pick<MediaDevices, 'getUserMedia' | 'enumerateDevices'>;
 
 export async function listCameras(md: MediaDevicesLike | undefined = navigator.mediaDevices): Promise<CameraDevice[]> {
@@ -46,23 +52,46 @@ export async function listCameras(md: MediaDevicesLike | undefined = navigator.m
     .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }));
 }
 
-/** Open a webcam stream. Prefers 1280x720@60 (wide FOV, no 4:3 crop), accepts anything. */
+/** Open a webcam stream. Prefers physical hardware cameras over virtual drivers (Camo/OBS/ByteCast) and 1280x720@60. */
 export async function openCamera(deviceId: string, md: MediaDevicesLike | undefined = globalThis.navigator?.mediaDevices): Promise<MediaStream> {
   if (!md?.getUserMedia) {
     throw new CameraError('unsupported', 'Camera access is not available here (requires a secure context: https, localhost or the desktop app).');
   }
+
+  let targetId = deviceId;
+  if (!targetId && typeof md.enumerateDevices === 'function') {
+    let cams: CameraDevice[] = [];
+    try {
+      cams = await listCameras(md);
+    } catch {
+      // Ignore enumeration errors before permission grant
+    }
+    const labeled = cams.filter((c) => c.label && !/^Camera \d+$/.test(c.label));
+    if (labeled.length > 0) {
+      const physical = labeled.find((c) => !isVirtualCamera(c.label));
+      if (physical?.deviceId) {
+        targetId = physical.deviceId;
+      } else {
+        throw new CameraError(
+          'no-camera',
+          `No physical webcam detected (only virtual cameras found: ${labeled.map((c) => c.label).slice(0, 3).join(', ')}). Check your laptop's physical camera privacy switch (right side of laptop or camera hotkey) to turn on Integrated Camera — head tracking will auto-connect as soon as it turns on.`,
+        );
+      }
+    }
+  }
+
   const video: MediaTrackConstraints = {
     width: { ideal: 1280 },
     height: { ideal: 720 },
     frameRate: { ideal: 60 },
-    ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' }),
+    ...(targetId ? { deviceId: { exact: targetId } } : { facingMode: 'user' }),
   };
   try {
     return await md.getUserMedia({ video, audio: false });
   } catch (err) {
     const e = classifyCameraError(err);
-    if (deviceId && e.kind === 'no-camera') {
-      // Stored device vanished: fall back to any camera.
+    if (targetId && (e.kind === 'no-camera' || e.kind === 'camera-busy')) {
+      // Stored or preferred device vanished/busy: fall back to any available camera.
       try {
         return await md.getUserMedia({ video: { ...video, deviceId: undefined }, audio: false });
       } catch (err2) {

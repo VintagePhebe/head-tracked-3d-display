@@ -421,7 +421,7 @@ export class DesktopInteractionController {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (matchShortcut(e, this.state.shortcut) || e.code === 'F8') {
+    if (matchShortcut(e, this.state.shortcut)) {
       e.preventDefault();
       e.stopPropagation();
       this.toggleMode();
@@ -452,7 +452,7 @@ export class DesktopInteractionController {
   }
 
   private handleKeyUp(e: KeyboardEvent): void {
-    if (matchShortcut(e, this.state.shortcut) || e.code === 'F8') {
+    if (matchShortcut(e, this.state.shortcut)) {
       e.preventDefault();
       return;
     }

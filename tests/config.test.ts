@@ -135,4 +135,33 @@ describe('camera error handling', () => {
     expect(await listCameras(md as never)).toEqual([]);
     await expect(openCamera('', md as never)).rejects.toMatchObject({ kind: 'no-camera' });
   });
+
+  it('prefers physical webcams over virtual camera drivers (Camo/OBS/ByteCast)', async () => {
+    const calls: MediaStreamConstraints[] = [];
+    const md = {
+      getUserMedia: async (c: MediaStreamConstraints) => {
+        calls.push(c);
+        return 'physical-stream' as unknown as MediaStream;
+      },
+      enumerateDevices: async () => [
+        { kind: 'videoinput', deviceId: 'camo-1', label: 'Camo' },
+        { kind: 'videoinput', deviceId: 'obs-1', label: 'OBS Virtual Camera' },
+        { kind: 'videoinput', deviceId: 'real-1', label: 'Integrated Camera' },
+      ] as MediaDeviceInfo[],
+    };
+    expect(await openCamera('', md as never)).toBe('physical-stream');
+    expect((calls[0].video as MediaTrackConstraints).deviceId).toEqual({ exact: 'real-1' });
+  });
+
+  it('rejects default webcam open when only virtual cameras exist, unless explicitly selected', async () => {
+    const md = {
+      getUserMedia: async () => 'virtual-stream' as unknown as MediaStream,
+      enumerateDevices: async () => [
+        { kind: 'videoinput', deviceId: 'camo-1', label: 'Camo' },
+        { kind: 'videoinput', deviceId: 'byte-1', label: 'ByteCast VirtualCamera1' },
+      ] as MediaDeviceInfo[],
+    };
+    await expect(openCamera('', md as never)).rejects.toMatchObject({ kind: 'no-camera' });
+    expect(await openCamera('camo-1', md as never)).toBe('virtual-stream');
+  });
 });

@@ -26,6 +26,7 @@ import {
   type CameraModel,
   type FaceMeasurement,
 } from './tracking/eyeEstimator';
+import { isVirtualCamera, listCameras } from './tracking/camera';
 import { FaceTracker } from './tracking/faceTracker';
 import { HeadPoseFilter, type PoseState } from './tracking/headPose';
 import { MouseSimulator } from './tracking/mouseSim';
@@ -38,6 +39,9 @@ const appEl = document.getElementById('app')!;
 const canvas = document.getElementById('vw-canvas') as HTMLCanvasElement;
 
 let cfg: AppConfig = loadConfig(window.localStorage);
+if (cfg.desktop.shortcut === 'F8') {
+  cfg.desktop.shortcut = 'Alt+Shift+D';
+}
 if (cfg.screen.autoResolution) {
   const dpr = window.devicePixelRatio || 1;
   cfg.screen.resolutionX = Math.round(window.screen.width * dpr);
@@ -149,9 +153,18 @@ const tracker = new FaceTracker({
   onStatus(status, message) {
     hud.renderBar();
     if (status === 'error' && message) {
-      hud.showToast(message, true);
+      hud.showToast(message, true, 9000);
     } else if (status === 'running') {
-      hud.refreshCameras();
+      hud.refreshCameras().then(() => {
+        if (!cfg.webcam.deviceId && isVirtualCamera(tracker.stats.cameraLabel)) {
+          listCameras().then((cams) => {
+            const physical = cams.find((c) => c.label && !isVirtualCamera(c.label));
+            if (physical?.deviceId) {
+              tracker.start(physical.deviceId);
+            }
+          });
+        }
+      });
     }
   },
 });
@@ -199,6 +212,7 @@ const hud = new AppHud(appEl, {
   },
   isTrackingEnabled: () => trackingEnabled,
   getTrackerStatus: () => tracker.status,
+  getActiveCameraLabel: () => tracker.stats.cameraLabel,
   openCalibration: () => wizard.open(),
   toggleFullscreen() {
     if (document.fullscreenElement) {
@@ -286,8 +300,36 @@ function applyConfig(next: AppConfig, persist = true): void {
 applyConfig(cfg, false);
 
 // Automatically start webcam head tracking on launch (unless running headless smoke test)
-if (!new URLSearchParams(window.location.search).has('smoke')) {
+const isSmoke = new URLSearchParams(window.location.search).has('smoke');
+if (!isSmoke) {
   tracker.start(cfg.webcam.deviceId);
+}
+
+// Auto-connect physical webcam when user toggles laptop hardware camera switch ON
+async function tryAutoConnectPhysicalCamera(): Promise<void> {
+  if (isSmoke || !trackingEnabled) return;
+  if (tracker.status === 'running' || tracker.status === 'starting' || tracker.status === 'loading-model') {
+    return;
+  }
+  try {
+    const cams = await listCameras();
+    const physical = cams.find((c) => c.label && !/^Camera \d+$/.test(c.label) && !isVirtualCamera(c.label));
+    if (physical?.deviceId) {
+      await tracker.start(cfg.webcam.deviceId || physical.deviceId);
+      if ((tracker.status as string) === 'running') {
+        hud.showToast(`Webcam connected (${tracker.stats.cameraLabel}) — Head Tracking active!`, false, 4500);
+      }
+    }
+  } catch {
+    // Ignore transient enumeration errors
+  }
+}
+
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  tryAutoConnectPhysicalCamera();
+});
+if (!isSmoke) {
+  window.setInterval(tryAutoConnectPhysicalCamera, 2500);
 }
 
 // Keyboard shortcuts for 3D App Control Mode (Mode B)
@@ -323,9 +365,9 @@ document.addEventListener('fullscreenchange', () => {
   debugView.syncVisibility(cfg, !!document.fullscreenElement);
 });
 
-// Prompt first-time users with a non-intrusive toast pointing to Calibration
-if (!cfg.calibrated && !new URLSearchParams(window.location.search).has('smoke')) {
-  hud.showToast('Windows Desktop is live on the 3D back wall! Press Alt+Shift+D (or F8) anytime to switch between Desktop Input and 3D App Controls.', false, 6500);
+// Prompt first-time users with a non-intrusive toast pointing to Mode toggle
+if (!cfg.calibrated && !isSmoke) {
+  hud.showToast('Windows Desktop is live on the 3D back wall! Press Alt+Shift+D anytime to switch between Desktop Input and 3D App Controls.', false, 6500);
 }
 
 // Main real-time render loop
