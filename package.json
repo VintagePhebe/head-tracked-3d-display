@@ -1,0 +1,37 @@
+{
+  "name": "virtual-window",
+  "productName": "Virtual Window",
+  "version": "1.0.0",
+  "description": "Head-tracked 3D display: turns a monitor into a physically correct window into a virtual room (off-axis projection + webcam head tracking).",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "assets": "node scripts/setup-assets.mjs",
+    "postinstall": "node scripts/setup-assets.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "electron": "npm run build && node scripts/launch-electron.mjs",
+    "electron:dev": "node scripts/electron-dev.mjs",
+    "smoke": "npm run build && node scripts/launch-electron.mjs --smoke",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.1.1",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "electron": "^45.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
