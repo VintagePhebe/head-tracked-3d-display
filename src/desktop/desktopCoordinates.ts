@@ -108,7 +108,6 @@ export function raycastDesktopSurface(
 
   const wx = eye.x + t * (pScreen.x - eye.x);
   const wy = eye.y + t * (pScreen.y - eye.y);
-  const worldPoint = v3(wx, wy, targetZ);
 
   const rawU = (wx - surface.centerX) / surface.widthM + 0.5;
   const rawV = (wy - surface.centerY) / surface.heightM + 0.5;
@@ -117,6 +116,9 @@ export function raycastDesktopSurface(
 
   const u = Math.min(1, Math.max(0, rawU));
   const v = Math.min(1, Math.max(0, rawV));
+  const clampedWx = surface.centerX + (u - 0.5) * surface.widthM;
+  const clampedWy = surface.centerY + (v - 0.5) * surface.heightM;
+  const worldPoint = v3(clampedWx, clampedWy, targetZ);
   const vTop = 1 - v; // OS screen Y grows downward from top edge (v = 1)
 
   const { display } = surface;

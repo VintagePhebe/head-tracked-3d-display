@@ -151,14 +151,15 @@ public static class Win32DesktopBridge {
         string action,
         int x,
         int y,
+        int endX,
+        int endY,
         string button,
         int wheelDeltaX,
-        int wheelDeltaY,
-        int restoreX,
-        int restoreY,
-        bool hasRestore
+        int wheelDeltaY
     ) {
         IntPtr hwnd = new IntPtr(hwndVal);
+        POINT savedPt = new POINT();
+        bool hadSaved = GetCursorPos(out savedPt);
         try {
             SetClickThrough(hwnd, true);
             SetCursorPos(x, y);
@@ -179,21 +180,12 @@ public static class Win32DesktopBridge {
                         : button == "middle" ? MOUSEEVENTF_MIDDLEUP
                         : MOUSEEVENTF_LEFTUP;
 
-            if (action == "down") {
+            if (action == "click") {
                 if (lastTargetWindow != IntPtr.Zero) {
                     SetForegroundWindow(lastTargetWindow);
                 }
                 mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(5);
-            } else if (action == "up") {
-                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(5);
-            } else if (action == "click") {
-                if (lastTargetWindow != IntPtr.Zero) {
-                    SetForegroundWindow(lastTargetWindow);
-                }
-                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(4);
+                Thread.Sleep(6);
                 mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
                 Thread.Sleep(4);
             } else if (action == "dblclick") {
@@ -202,13 +194,26 @@ public static class Win32DesktopBridge {
                 }
                 mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
                 mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(15);
+                Thread.Sleep(18);
                 mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
                 mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(5);
-            } else if (action == "dragmove") {
-                mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(2);
+                Thread.Sleep(6);
+            } else if (action == "drag") {
+                if (lastTargetWindow != IntPtr.Zero) {
+                    SetForegroundWindow(lastTargetWindow);
+                }
+                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(10);
+                int steps = 8;
+                for (int i = 1; i <= steps; i++) {
+                    int ix = x + ((endX - x) * i) / steps;
+                    int iy = y + ((endY - y) * i) / steps;
+                    SetCursorPos(ix, iy);
+                    mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
+                    Thread.Sleep(4);
+                }
+                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(6);
             } else if (action == "wheel") {
                 if (wheelDeltaY != 0) {
                     mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheelDeltaY, UIntPtr.Zero);
@@ -220,8 +225,8 @@ public static class Win32DesktopBridge {
             }
         } finally {
             SetClickThrough(hwnd, false);
-            if (hasRestore) {
-                SetCursorPos(restoreX, restoreY);
+            if (hadSaved) {
+                SetCursorPos(savedPt.X, savedPt.Y);
             }
         }
         return GetSystemCursorKind();
@@ -267,12 +272,11 @@ while ($null -ne ($line = [Console]::ReadLine())) {
           [string]$cmd.action,
           [int]$cmd.x,
           [int]$cmd.y,
+          [int]$cmd.endX,
+          [int]$cmd.endY,
           [string]$cmd.button,
           [int]$cmd.wheelDeltaX,
-          [int]$cmd.wheelDeltaY,
-          [int]$cmd.restoreX,
-          [int]$cmd.restoreY,
-          [bool]$cmd.hasRestore
+          [int]$cmd.wheelDeltaY
         )
         Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $true; cursor = $cursor })
       }
@@ -403,12 +407,11 @@ class NativeDesktopHelper {
       action: event.action || 'click',
       x: Math.round(event.x || 0),
       y: Math.round(event.y || 0),
+      endX: Math.round(event.endX ?? event.x ?? 0),
+      endY: Math.round(event.endY ?? event.y ?? 0),
       button: event.button || 'left',
       wheelDeltaX: Math.round(event.wheelDeltaX || 0),
       wheelDeltaY: Math.round(event.wheelDeltaY || 0),
-      restoreX: Math.round(event.restoreX || 0),
-      restoreY: Math.round(event.restoreY || 0),
-      hasRestore: Boolean(event.hasRestore),
     });
   }
 

@@ -285,6 +285,11 @@ function applyConfig(next: AppConfig, persist = true): void {
 
 applyConfig(cfg, false);
 
+// Automatically start webcam head tracking on launch (unless running headless smoke test)
+if (!new URLSearchParams(window.location.search).has('smoke')) {
+  tracker.start(cfg.webcam.deviceId);
+}
+
 // Keyboard shortcuts for 3D App Control Mode (Mode B)
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -338,6 +343,10 @@ function animate(nowMs: number): void {
 
   const dtS = perf.tick(nowMs);
   const elapsedS = (nowMs - startT) / 1000;
+
+  if (trackingEnabled) {
+    tracker.tick(nowMs);
+  }
 
   const useWebcam = trackingEnabled && tracker.status === 'running';
   if (useWebcam) {

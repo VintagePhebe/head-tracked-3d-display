@@ -337,14 +337,17 @@ export class DesktopSurface3D {
   }
 
   /**
-   * Position the 3D virtual cursor at world intersection point `(wx, wy)` on the desktop plane.
+   * Position the 3D virtual cursor at world intersection point `(wx, wy)` on the desktop plane,
+   * strictly clamped to the virtual screen boundaries.
    */
   updateCursor(wx: number, wy: number, visible: boolean, pressed = false): void {
     this.cursorGroup.visible = visible && this.group.visible;
     if (!this.cursorGroup.visible) return;
 
-    const localX = wx - this.spec.centerX;
-    const localY = wy - this.spec.centerY;
+    const hw = this.spec.widthM * 0.5;
+    const hh = this.spec.heightM * 0.5;
+    const localX = Math.min(hw, Math.max(-hw, wx - this.spec.centerX));
+    const localY = Math.min(hh, Math.max(-hh, wy - this.spec.centerY));
     this.cursorGroup.position.set(localX, localY, 0.0015);
     this.clickRingMesh.material.opacity = pressed ? 0.85 : 0.0;
   }

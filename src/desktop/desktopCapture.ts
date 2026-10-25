@@ -27,15 +27,14 @@ export interface DesktopBridgeApi {
   setCaptureExclusion(enabled: boolean): Promise<{ ok: boolean }>;
   setAlwaysOnTop(enabled: boolean): Promise<{ ok: boolean }>;
   sendMouse(event: {
-    action: 'down' | 'up' | 'click' | 'dblclick' | 'dragmove' | 'wheel';
+    action: 'click' | 'dblclick' | 'drag' | 'wheel';
     x: number;
     y: number;
+    endX?: number;
+    endY?: number;
     button?: 'left' | 'right' | 'middle';
     wheelDeltaX?: number;
     wheelDeltaY?: number;
-    restoreX?: number;
-    restoreY?: number;
-    hasRestore?: boolean;
   }): Promise<{ ok: boolean; cursor?: string }>;
   sendKey(event: {
     action: 'down' | 'up';

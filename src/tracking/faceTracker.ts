@@ -151,12 +151,32 @@ export class FaceTracker {
 
   private lastW = 0;
   private lastH = 0;
+  private lastVideoTime = -1;
+  private lastSubmitWallMs = 0;
+
+  /**
+   * Called from the main render loop so webcam frames continue to be processed even if
+   * Chromium throttles `requestVideoFrameCallback` on an offscreen `<video>` element
+   * while desktop capture is active or an external Windows application holds focus.
+   */
+  tick(nowMs: number): void {
+    if (this.status !== 'running' || this.busy) return;
+    if (this.video.readyState >= 2 && this.video.videoWidth > 0) {
+      const vt = this.video.currentTime;
+      if (vt !== this.lastVideoTime && nowMs - this.lastSubmitWallMs >= 12) {
+        this.lastVideoTime = vt;
+        this.lastSubmitWallMs = nowMs;
+        this.submit(this.video, this.video.videoWidth, this.video.videoHeight, nowMs);
+      }
+    }
+  }
 
   private submit(src: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement, w: number, h: number, t: number) {
     if (!this.worker) return;
     this.busy = true;
     this.lastW = w;
     this.lastH = h;
+    this.lastSubmitWallMs = performance.now();
     const scale = Math.min(1, DETECT_WIDTH / w);
     createImageBitmap(src, { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: 'medium' })
       .then((bitmap) => {

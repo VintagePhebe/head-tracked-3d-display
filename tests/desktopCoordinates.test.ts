@@ -85,9 +85,11 @@ describe('desktop coordinate mapping & perspective raycasting', () => {
     expect(hit.inside).toBe(false);
     expect(hit.rawU).toBeGreaterThan(1);
     expect(hit.rawV).toBeGreaterThan(1);
-    // Clamped coordinates stay within valid display pixel bounds
+    // Clamped coordinates stay within valid display pixel bounds and virtual screen 3D bounds
     expect(hit.desktopX).toBe(1919);
     expect(hit.desktopY).toBe(0);
+    expect(hit.worldPoint.x).toBeCloseTo(surface.centerX + surface.widthM / 2, 9);
+    expect(hit.worldPoint.y).toBeCloseTo(surface.centerY + surface.heightM / 2, 9);
   });
 
   it('handles secondary displays with negative or offset virtual-screen coordinates', () => {
