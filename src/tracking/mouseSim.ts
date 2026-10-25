@@ -20,6 +20,11 @@ export class MouseSimulator {
   lateralRangeM = { x: 0.45, y: 0.30 };
   minZ = 0.15;
   maxZ = 2.0;
+  /**
+   * When true (Mode A: Desktop Interaction active), normal pointer movement and wheel scroll
+   * are routed to the 3D Windows Desktop; holding Alt + moving the mouse still simulates head movement.
+   */
+  desktopInteractionActive = false;
 
   constructor(defaultDistanceM: number) {
     this.defaultZ = defaultDistanceM;
@@ -57,6 +62,7 @@ export class MouseSimulator {
   /** Attach pointer and wheel listeners to the rendering canvas. */
   attach(canvas: HTMLElement): () => void {
     const onMove = (e: PointerEvent) => {
+      if (this.desktopInteractionActive && !e.altKey) return;
       const r = canvas.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
       const nx = ((e.clientX - r.left) / r.width) * 2 - 1; // -1 .. +1
@@ -65,11 +71,15 @@ export class MouseSimulator {
       this.target.y = ny * this.lateralRangeM.y;
     };
     const onWheel = (e: WheelEvent) => {
+      if (this.desktopInteractionActive && !e.altKey) return;
       e.preventDefault();
       const step = e.deltaY * 0.0004;
       this.target.z = Math.min(this.maxZ, Math.max(this.minZ, this.target.z + step));
     };
-    const onDblClick = () => this.reset();
+    const onDblClick = () => {
+      if (this.desktopInteractionActive) return;
+      this.reset();
+    };
 
     canvas.addEventListener('pointermove', onMove, { passive: true });
     canvas.addEventListener('wheel', onWheel, { passive: false });

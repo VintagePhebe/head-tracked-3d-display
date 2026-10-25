@@ -9,6 +9,8 @@
  * continuous motion parallax as the viewer moves their head.
  */
 import * as THREE from 'three';
+import type { DesktopSurfaceSpec, DisplayBounds } from '../desktop/desktopCoordinates';
+import { DesktopSurface3D, type DesktopSurfaceConfig } from '../desktop/desktopSurface3D';
 import { buildScreenOutline, disposeObject, type VirtualScene } from './sceneTypes';
 
 interface AnimatedItem {
@@ -86,16 +88,21 @@ function makeWallArtTexture(): THREE.CanvasTexture {
 
 export class VirtualRoomScene implements VirtualScene {
   readonly scene = new THREE.Scene();
+  readonly desktopSurface = new DesktopSurface3D();
   private root = new THREE.Group();
+  private classicDecor = new THREE.Group();
   private screenFrame: THREE.LineLoop | null = null;
   private frameVisible = false;
   private animated: AnimatedItem[] = [];
   private widthM = 0.531;
   private heightM = 0.299;
+  private desktopEnabled = true;
+  private desktopDepthM = 0.7;
 
   constructor(widthM: number, heightM: number) {
     this.scene.background = new THREE.Color(0x0b0f17);
     this.scene.add(this.root);
+    this.scene.add(this.desktopSurface.group);
     this.setScreenSize(widthM, heightM);
   }
 
@@ -103,6 +110,21 @@ export class VirtualRoomScene implements VirtualScene {
     this.widthM = widthM;
     this.heightM = heightM;
     this.rebuild();
+  }
+
+  configureDesktop(cfg: DesktopSurfaceConfig, display: DisplayBounds): DesktopSurfaceSpec {
+    const needRebuild =
+      cfg.enabled !== this.desktopEnabled ||
+      (cfg.enabled && Math.abs(cfg.depthM - this.desktopDepthM) > 0.002);
+    this.desktopEnabled = cfg.enabled;
+    this.desktopDepthM = cfg.depthM;
+    if (needRebuild) {
+      this.rebuild();
+    }
+    if (this.classicDecor) {
+      this.classicDecor.visible = !cfg.enabled;
+    }
+    return this.desktopSurface.updateLayout(this.widthM, this.heightM, cfg, display);
   }
 
   setScreenFrameVisible(visible: boolean): void {
@@ -113,12 +135,16 @@ export class VirtualRoomScene implements VirtualScene {
   private rebuild(): void {
     disposeObject(this.root);
     this.root.clear();
+    this.classicDecor = new THREE.Group();
     this.animated = [];
 
     const w = this.widthM;
     const h = this.heightM;
-    // Room depth scales with monitor width (~1.35x width) so proportions stay coherent across screens.
-    const d = Math.max(0.48, w * 1.35);
+    // When the 3D desktop is mounted on the back wall, anchor the back wall directly behind it;
+    // otherwise scale depth with monitor width (~1.35x width).
+    const d = this.desktopEnabled
+      ? Math.max(0.2, this.desktopDepthM + 0.008)
+      : Math.max(0.48, w * 1.35);
     const hw = w / 2;
     const hh = h / 2;
 
@@ -195,7 +221,10 @@ export class VirtualRoomScene implements VirtualScene {
     fillLight.position.set(-w * 0.32, hh * 0.5, -d * 0.22);
     this.root.add(fillLight);
 
-    // 3. Back-wall framed artwork (z ≈ -0.96 d)
+    // 3. Back-wall framed artwork (shown when 3D Desktop back wall is disabled)
+    this.classicDecor.visible = !this.desktopEnabled;
+    this.root.add(this.classicDecor);
+
     const artW = w * 0.46;
     const artH = h * 0.36;
     const artY = hh * 0.22;
@@ -205,19 +234,19 @@ export class VirtualRoomScene implements VirtualScene {
     );
     frameMesh.position.set(0, artY, -d + 0.008);
     frameMesh.castShadow = true;
-    this.root.add(frameMesh);
+    this.classicDecor.add(frameMesh);
 
     const canvasMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(artW, artH),
       new THREE.MeshStandardMaterial({ map: makeWallArtTexture(), roughness: 0.5 }),
     );
     canvasMesh.position.set(0, artY, -d + 0.015);
-    this.root.add(canvasMesh);
+    this.classicDecor.add(canvasMesh);
 
-    // 4. Desk & workstation in the mid-to-back zone (z ≈ -0.52 d .. -0.82 d)
+    // 4. Desk / console table in the mid-to-back zone (lowered when back-wall desktop is active)
     const deskW = w * 0.58;
-    const deskD = d * 0.28;
-    const deskH = h * 0.34;
+    const deskD = d * 0.24;
+    const deskH = this.desktopEnabled ? h * 0.12 : h * 0.34;
     const deskZ = -d * 0.72;
     const deskTopY = -hh + deskH;
     const woodMat = new THREE.MeshStandardMaterial({ color: 0x6e472b, roughness: 0.55, metalness: 0.08 });
@@ -239,17 +268,17 @@ export class VirtualRoomScene implements VirtualScene {
       }
     }
 
-    // Ultrawide curved-style monitor on the desk
+    // Ultrawide curved-style monitor on the desk (hidden when back-wall desktop is active)
     const monW = deskW * 0.48;
     const monH = h * 0.24;
     const monStand = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.018, monH * 0.55, 16), darkMetal);
     monStand.position.set(0, deskTopY + monH * 0.25, deskZ - deskD * 0.18);
-    this.root.add(monStand);
+    this.classicDecor.add(monStand);
 
     const monBody = new THREE.Mesh(new THREE.BoxGeometry(monW, monH, 0.01), darkMetal);
     monBody.position.set(0, deskTopY + monH * 0.68, deskZ - deskD * 0.12);
     monBody.castShadow = true;
-    this.root.add(monBody);
+    this.classicDecor.add(monBody);
 
     const monScreen = new THREE.Mesh(
       new THREE.PlaneGeometry(monW * 0.94, monH * 0.88),
@@ -261,7 +290,7 @@ export class VirtualRoomScene implements VirtualScene {
       }),
     );
     monScreen.position.set(0, deskTopY + monH * 0.68, deskZ - deskD * 0.12 + 0.006);
-    this.root.add(monScreen);
+    this.classicDecor.add(monScreen);
 
     // Articulated desk lamp on right side of desk
     const lampX = deskW * 0.34;
@@ -398,30 +427,33 @@ export class VirtualRoomScene implements VirtualScene {
     };
 
     const rScale = Math.min(w, h);
+    const fx = this.desktopEnabled ? 0.39 : 0.22;
     // Near foreground sculpture (just 14% of room depth behind the screen glass!)
     addFloating(
-      new THREE.OctahedronGeometry(rScale * 0.052, 0),
+      new THREE.OctahedronGeometry(rScale * 0.046, 0),
       0x38bdf8,
       0x0284c7,
-      [-w * 0.22, h * 0.08, -d * 0.14],
+      [-w * fx, h * 0.26, -d * 0.14],
       0,
     );
-    // Center-right midground icosahedron (30% of room depth)
+    // Right midground icosahedron (30% of room depth)
     addFloating(
-      new THREE.IcosahedronGeometry(rScale * 0.058, 0),
+      new THREE.IcosahedronGeometry(rScale * 0.05, 0),
       0xf59e0b,
       0xd97706,
-      [w * 0.2, -h * 0.06, -d * 0.3],
+      [w * fx, -h * 0.22, -d * 0.3],
       2.1,
     );
-    // Deep midground torus knot (48% of room depth)
-    addFloating(
-      new THREE.TorusKnotGeometry(rScale * 0.038, rScale * 0.011, 64, 12),
-      0xa855f7,
-      0x7e22ce,
-      [-w * 0.04, h * 0.2, -d * 0.48],
-      4.2,
-    );
+    if (!this.desktopEnabled) {
+      // Deep midground torus knot (48% of room depth)
+      addFloating(
+        new THREE.TorusKnotGeometry(rScale * 0.038, rScale * 0.011, 64, 12),
+        0xa855f7,
+        0x7e22ce,
+        [-w * 0.04, h * 0.2, -d * 0.48],
+        4.2,
+      );
+    }
 
     // 7. Floor planter in front-right corner (z = -0.22 d)
     const potH = h * 0.16;
@@ -459,5 +491,6 @@ export class VirtualRoomScene implements VirtualScene {
 
   dispose(): void {
     disposeObject(this.root);
+    this.desktopSurface.dispose();
   }
 }

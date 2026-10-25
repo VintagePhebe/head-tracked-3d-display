@@ -5,12 +5,16 @@ import {
   applyMountPreset,
   defaultConfig,
   type AppConfig,
+  type DesktopCaptureQuality,
+  type DesktopInteractionMode,
   type Quality,
   type SceneId,
   type StereoMode,
   type TargetEyeMode,
   type WebcamMount,
 } from '../config/config';
+import type { DesktopCaptureStats, DesktopDisplaySource } from '../desktop/desktopCapture';
+import type { DesktopRaycastHit } from '../desktop/desktopCoordinates';
 import { listCameras, type CameraDevice } from '../tracking/camera';
 import type { TrackerStatus } from '../tracking/faceTracker';
 
@@ -25,6 +29,9 @@ export interface HudCallbacks {
   openCalibration(): void;
   toggleFullscreen(): void;
   resetMouseEye(): void;
+  getDesktopSources(): DesktopDisplaySource[];
+  getDesktopStats(): DesktopCaptureStats;
+  toggleInteractionMode(): void;
 }
 
 export class AppHud {
@@ -32,6 +39,7 @@ export class AppHud {
   readonly drawer: HTMLElement;
   readonly toastEl: HTMLElement;
   readonly fsPeekBtn: HTMLButtonElement;
+  readonly modePillEl: HTMLButtonElement;
 
   private settingsOpen = false;
   private cameras: CameraDevice[] = [];
@@ -53,9 +61,16 @@ export class AppHud {
     this.fsPeekBtn.textContent = '☰ Controls (H)';
     this.fsPeekBtn.addEventListener('click', () => this.revealInFullscreen());
 
-    parent.append(this.bar, this.drawer, this.toastEl, this.fsPeekBtn);
+    this.modePillEl = document.createElement('button');
+    this.modePillEl.type = 'button';
+    this.modePillEl.className = 'vw-mode-pill';
+    this.modePillEl.title = 'Click or press shortcut to switch between Desktop Interaction (Mode A) and 3D App Controls (Mode B)';
+    this.modePillEl.addEventListener('click', () => this.cb.toggleInteractionMode());
+
+    parent.append(this.bar, this.drawer, this.toastEl, this.fsPeekBtn, this.modePillEl);
     this.renderBar();
     this.renderDrawer();
+    this.updateModePill(null);
     this.setupFullscreenAutoHide();
   }
 
@@ -128,19 +143,45 @@ export class AppHud {
     this.renderBar();
   }
 
+  updateModePill(hit: DesktopRaycastHit | null): void {
+    const cfg = this.cb.getConfig();
+    if (!cfg.desktop.enabled || cfg.render.scene !== 'room') {
+      this.modePillEl.classList.add('hidden');
+      return;
+    }
+    this.modePillEl.classList.remove('hidden');
+    const isDesk = cfg.desktop.interactionEnabled && cfg.desktop.interactionMode === 'desktop';
+    this.modePillEl.classList.toggle('desktop-active', isDesk);
+
+    const coordsTxt =
+      hit && hit.inside
+        ? `<span class="vw-mode-coords">[${hit.desktopX}, ${hit.desktopY}]</span>`
+        : `<span class="vw-mode-coords">(${cfg.desktop.shortcut})</span>`;
+
+    this.modePillEl.innerHTML = `
+      <span class="vw-mode-dot"></span>
+      <span>${isDesk ? 'Mode A: Desktop Interaction' : 'Mode B: 3D App Controls'}</span>
+      ${coordsTxt}
+    `;
+  }
+
   renderBar(): void {
     const cfg = this.cb.getConfig();
     const status = this.cb.getTrackerStatus();
     const camRunning = status === 'running' || status === 'starting' || status === 'loading-model';
     const tracking = this.cb.isTrackingEnabled();
     const isFs = !!document.fullscreenElement;
+    const isDeskMode =
+      cfg.desktop.enabled &&
+      cfg.desktop.interactionEnabled &&
+      cfg.desktop.interactionMode === 'desktop';
 
     const statusBadge =
       status === 'running' && tracking
         ? `<span class="vw-status ok">● Head Tracking</span>`
         : status === 'loading-model' || status === 'starting'
           ? `<span class="vw-status warn">◌ Starting Camera…</span>`
-          : `<span class="vw-status sim">◎ Mouse Sim (scroll = Z)</span>`;
+          : `<span class="vw-status sim">◎ Mouse Sim (${isDeskMode ? 'Alt+Move' : 'scroll = Z'})</span>`;
 
     this.bar.innerHTML = `
       <div class="vw-brand">
@@ -154,6 +195,9 @@ export class AppHud {
         </button>
         <button type="button" class="vw-btn ${tracking && camRunning ? 'active' : ''}" id="hud-track" title="Toggle between Webcam Head Tracking and Mouse Simulation">
           ${tracking ? 'Disable Tracking' : 'Enable Tracking'}
+        </button>
+        <button type="button" class="vw-btn ${isDeskMode ? 'active' : ''}" id="hud-desk-mode" title="Toggle between Mode A (Desktop Interaction) and Mode B (3D App Controls) [${cfg.desktop.shortcut}]">
+          ${isDeskMode ? '🖥 Desktop Input: ON' : '🎮 3D App Input'}
         </button>
         <button type="button" class="vw-btn" id="hud-cal">Recalibrate</button>
         <select id="hud-scene" class="vw-select" aria-label="Select Scene">
@@ -181,6 +225,9 @@ export class AppHud {
     q('#hud-track')?.addEventListener('click', () => {
       this.cb.setTrackingEnabled(!tracking);
     });
+    q('#hud-desk-mode')?.addEventListener('click', () => {
+      this.cb.toggleInteractionMode();
+    });
     q('#hud-cal')?.addEventListener('click', () => this.cb.openCalibration());
     q<HTMLSelectElement>('#hud-scene')?.addEventListener('change', (e) => {
       const val = (e.target as HTMLSelectElement).value as SceneId;
@@ -188,6 +235,7 @@ export class AppHud {
         c.render.scene = val;
       });
       this.renderDrawer();
+      this.updateModePill(null);
     });
     q('#hud-perf')?.addEventListener('click', () => {
       this.cb.updateConfig((c) => {
@@ -210,12 +258,97 @@ export class AppHud {
       ),
     ].join('');
 
+    const sources = this.cb.getDesktopSources();
+    const dStats = this.cb.getDesktopStats();
+    const dispOptions =
+      sources.length > 0
+        ? sources
+            .map(
+              (s) =>
+                `<option value="${s.displayId}" ${cfg.desktop.displayId === s.displayId || (cfg.desktop.displayId === 'primary' && s.isPrimary) ? 'selected' : ''}>${s.name} (${s.bounds.width}×${s.bounds.height})</option>`,
+            )
+            .join('')
+        : `<option value="primary" selected>Primary Display (${dStats.width}×${dStats.height})</option>`;
+
+    const aspectStr = dStats.aspect ? `${dStats.aspect.toFixed(2)}:1` : '1.78:1';
+    const capStatus = dStats.active
+      ? `Live ${dStats.width}×${dStats.height} (${aspectStr}) · ${dStats.captureFps.toFixed(0)} FPS`
+      : dStats.error
+        ? `Standby (${dStats.error})`
+        : 'Standby';
+
     this.drawer.innerHTML = `
       <div class="vw-drawer-head">
         <h3>Settings &amp; Configuration</h3>
         <button type="button" class="vw-icon-btn" id="drw-close" title="Close Settings">✕</button>
       </div>
       <div class="vw-drawer-body">
+        <section class="vw-sec">
+          <h4>Desktop Integration (Back Wall)</h4>
+          <div class="vw-form-grid">
+            <label class="vw-check full">
+              <input type="checkbox" id="set-desk-en" ${cfg.desktop.enabled ? 'checked' : ''} />
+              Enable Windows Desktop on Back Wall
+            </label>
+            <label class="full">Select Display
+              <select id="set-desk-disp">${dispOptions}</select>
+            </label>
+            <div class="vw-desk-readout" id="set-desk-readout">
+              <span>Status: <b>${capStatus}</b></span>
+              <span>Self-Capture Guard: <b>${dStats.excludeFromCapture ? 'WDA_EXCLUDEFROMCAPTURE Active' : 'Browser Surface Exclude'}</b></span>
+            </div>
+            <label>Screen Depth (cm)
+              <input type="number" step="2" min="20" max="250" id="set-desk-depth" value="${cfg.desktop.depthCm}" />
+            </label>
+            <label>Mode Shortcut
+              <select id="set-desk-short">
+                <option value="Alt+Shift+D" ${cfg.desktop.shortcut === 'Alt+Shift+D' ? 'selected' : ''}>Alt+Shift+D</option>
+                <option value="F8" ${cfg.desktop.shortcut === 'F8' ? 'selected' : ''}>F8</option>
+                <option value="Ctrl+Shift+D" ${cfg.desktop.shortcut === 'Ctrl+Shift+D' ? 'selected' : ''}>Ctrl+Shift+D</option>
+              </select>
+            </label>
+            <label>Width Scale (${Math.round(cfg.desktop.widthScale * 100)}%)
+              <input type="range" min="0.35" max="1.0" step="0.02" id="set-desk-ws" value="${cfg.desktop.widthScale}" />
+            </label>
+            <label>Height Scale (${Math.round(cfg.desktop.heightScale * 100)}%)
+              <input type="range" min="0.35" max="1.0" step="0.02" id="set-desk-hs" value="${cfg.desktop.heightScale}" />
+            </label>
+            <label>Position X (cm)
+              <input type="number" step="0.5" min="-100" max="100" id="set-desk-ox" value="${cfg.desktop.offsetXCm}" />
+            </label>
+            <label>Position Y (cm)
+              <input type="number" step="0.5" min="-100" max="100" id="set-desk-oy" value="${cfg.desktop.offsetYCm}" />
+            </label>
+            <label>Capture FPS
+              <select id="set-desk-fps">
+                <option value="60" ${cfg.desktop.fps === 60 ? 'selected' : ''}>60 FPS</option>
+                <option value="30" ${cfg.desktop.fps === 30 ? 'selected' : ''}>30 FPS</option>
+              </select>
+            </label>
+            <label>Capture Quality
+              <select id="set-desk-qual">
+                <option value="native" ${cfg.desktop.quality === 'native' ? 'selected' : ''}>Native Resolution</option>
+                <option value="1440p" ${cfg.desktop.quality === '1440p' ? 'selected' : ''}>1440p QHD</option>
+                <option value="1080p" ${cfg.desktop.quality === '1080p' ? 'selected' : ''}>1080p FHD</option>
+              </select>
+            </label>
+            <label class="full">Active Input Routing Mode
+              <select id="set-desk-mode">
+                <option value="desktop" ${cfg.desktop.interactionMode === 'desktop' ? 'selected' : ''}>Mode A — Desktop Interaction (Windows Input)</option>
+                <option value="app" ${cfg.desktop.interactionMode === 'app' ? 'selected' : ''}>Mode B — 3D Application Controls</option>
+              </select>
+            </label>
+            <label class="vw-check full">
+              <input type="checkbox" id="set-desk-inter" ${cfg.desktop.interactionEnabled ? 'checked' : ''} />
+              Enable Mouse &amp; Keyboard Forwarding to Desktop
+            </label>
+            <label class="vw-check full">
+              <input type="checkbox" id="set-desk-cur" ${cfg.desktop.showCursor ? 'checked' : ''} />
+              Show Perspective-Aligned 3D Virtual Cursor
+            </label>
+          </div>
+        </section>
+
         <section class="vw-sec">
           <h4>Physical Screen Dimensions</h4>
           <div class="vw-form-grid">
@@ -394,6 +527,70 @@ export class AppHud {
     bindNum('#set-hfov', (c, v) => { c.webcam.hfovDeg = v; });
     bindNum('#set-ipd', (c, v) => { c.eye.ipdMm = v; });
     bindNum('#set-defd', (c, v) => { c.eye.defaultDistanceCm = v; });
+    bindNum('#set-desk-depth', (c, v) => { c.desktop.depthCm = v; });
+    bindNum('#set-desk-ox', (c, v) => { c.desktop.offsetXCm = v; });
+    bindNum('#set-desk-oy', (c, v) => { c.desktop.offsetYCm = v; });
+
+    q<HTMLInputElement>('#set-desk-en')?.addEventListener('change', (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      this.cb.updateConfig((c) => { c.desktop.enabled = checked; });
+      this.renderBar();
+      this.renderDrawer();
+      this.updateModePill(null);
+    });
+
+    q<HTMLSelectElement>('#set-desk-disp')?.addEventListener('change', (e) => {
+      const id = (e.target as HTMLSelectElement).value;
+      this.cb.updateConfig((c) => { c.desktop.displayId = id; });
+      this.renderDrawer();
+    });
+
+    q<HTMLSelectElement>('#set-desk-short')?.addEventListener('change', (e) => {
+      const val = (e.target as HTMLSelectElement).value;
+      this.cb.updateConfig((c) => { c.desktop.shortcut = val; });
+      this.renderBar();
+      this.updateModePill(null);
+    });
+
+    q<HTMLSelectElement>('#set-desk-fps')?.addEventListener('change', (e) => {
+      const val = parseInt((e.target as HTMLSelectElement).value, 10) === 30 ? 30 : 60;
+      this.cb.updateConfig((c) => { c.desktop.fps = val; });
+    });
+
+    q<HTMLSelectElement>('#set-desk-qual')?.addEventListener('change', (e) => {
+      const val = (e.target as HTMLSelectElement).value as DesktopCaptureQuality;
+      this.cb.updateConfig((c) => { c.desktop.quality = val; });
+    });
+
+    q<HTMLSelectElement>('#set-desk-mode')?.addEventListener('change', (e) => {
+      const val = (e.target as HTMLSelectElement).value as DesktopInteractionMode;
+      this.cb.updateConfig((c) => { c.desktop.interactionMode = val; });
+      this.renderBar();
+      this.updateModePill(null);
+    });
+
+    q<HTMLInputElement>('#set-desk-inter')?.addEventListener('change', (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      this.cb.updateConfig((c) => { c.desktop.interactionEnabled = checked; });
+      this.renderBar();
+      this.updateModePill(null);
+    });
+
+    q<HTMLInputElement>('#set-desk-cur')?.addEventListener('change', (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      this.cb.updateConfig((c) => { c.desktop.showCursor = checked; });
+    });
+
+    for (const [sel, fn] of [
+      ['#set-desk-ws', (c: AppConfig, v: number) => (c.desktop.widthScale = v)],
+      ['#set-desk-hs', (c: AppConfig, v: number) => (c.desktop.heightScale = v)],
+    ] as const) {
+      q<HTMLInputElement>(sel)?.addEventListener('input', (e) => {
+        const v = parseFloat((e.target as HTMLInputElement).value);
+        this.cb.updateConfig((c) => fn(c, v));
+        this.renderDrawer();
+      });
+    }
 
     q<HTMLSelectElement>('#set-dev')?.addEventListener('change', (e) => {
       const id = (e.target as HTMLSelectElement).value;

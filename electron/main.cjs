@@ -1,9 +1,22 @@
-const { app, BrowserWindow, protocol, session } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  protocol,
+  session,
+  ipcMain,
+  desktopCapturer,
+  screen,
+  globalShortcut,
+} = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { NativeDesktopHelper, getWindowHwndNumber } = require('./nativeDesktop.cjs');
 
 const isSmoke = process.argv.includes('--smoke');
 const devUrl = process.env.VITE_DEV_SERVER_URL;
+const nativeDesktop = new NativeDesktopHelper();
+let mainWindow = null;
+let currentShortcut = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -76,7 +89,7 @@ async function runSmokeVerification(win) {
       const poseProjections = {};
       for (const [name, [x, y, z]] of Object.entries(poses)) {
         api.mouseSim.setEye(x, y, z, true);
-        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await sleep(45);
         const p = api.getLastProjection();
         poseProjections[name] = {
           distance: Number(p.distance.toFixed(4)),
@@ -97,13 +110,34 @@ async function runSmokeVerification(win) {
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       }
 
+      // Return to room scene so the 3D back-wall desktop is active
+      const roomCfg = structuredClone(api.getConfig());
+      roomCfg.render.scene = 'room';
+      api.applyConfig(roomCfg, false);
+
       // 2. Measure steady-state render FPS over 600 ms
       await sleep(600);
       const fps = Number(api.perf.snapshot.fps.toFixed(1));
       const frameMs = Number(api.perf.snapshot.frameMs.toFixed(2));
       const p95FrameMs = Number(api.perf.snapshot.p95FrameMs.toFixed(2));
 
-      // 3. Test real MediaPipe Face Landmarker worker + WASM on tests/fixtures/face.jpg
+      // 3. Verify 3D Windows Desktop integration, capture exclusion & perspective raycasting
+      const dStats = api.desktopCapture.stats;
+      const dSpec = api.scenes.room.desktopSurface.getSpec();
+      const screenRect = {
+        pa: { x: -roomCfg.screen.widthCm / 200, y: -roomCfg.screen.heightCm / 200, z: 0 },
+        pb: { x: roomCfg.screen.widthCm / 200, y: -roomCfg.screen.heightCm / 200, z: 0 },
+        pc: { x: -roomCfg.screen.widthCm / 200, y: roomCfg.screen.heightCm / 200, z: 0 },
+      };
+      const hitCenter = api.raycastDesktopSurface({ x: 0, y: 0, z: 0.6 }, screenRect, 0, 0, dSpec);
+      const hitHeadLeft = api.raycastDesktopSurface({ x: -0.14, y: 0, z: 0.6 }, screenRect, 0, 0, dSpec);
+      const hitHeadRight = api.raycastDesktopSurface({ x: 0.14, y: 0, z: 0.6 }, screenRect, 0, 0, dSpec);
+
+      const modeBefore = api.getConfig().desktop.interactionMode;
+      const modeToggled = api.desktopInteraction.toggleMode();
+      const modeRestored = api.desktopInteraction.toggleMode();
+
+      // 4. Test real MediaPipe Face Landmarker worker + WASM on tests/fixtures/face.jpg
       const img = new Image();
       img.crossOrigin = 'anonymous';
       await new Promise((resolve, reject) => {
@@ -120,7 +154,7 @@ async function runSmokeVerification(win) {
       const eyeEst = api.estimateEyeFromFace(det.face, det.width, det.height);
 
       return {
-        ok: glError === 0 && !!det.face,
+        ok: glError === 0 && !!det.face && api.scenes.room.desktopSurface.group.visible,
         glError,
         fps,
         frameMs,
@@ -129,6 +163,19 @@ async function runSmokeVerification(win) {
         coldDetectMs,
         warmDetectMs,
         poseProjections,
+        desktopIntegration: {
+          surfaceVisible: api.scenes.room.desktopSurface.group.visible,
+          captureActive: dStats.active,
+          excludeFromCapture: dStats.excludeFromCapture,
+          resolution: [dStats.width, dStats.height],
+          surfaceMeters: [Number(dSpec.widthM.toFixed(3)), Number(dSpec.heightM.toFixed(3)), Number(dSpec.depthM.toFixed(3))],
+          raycastParallax: {
+            centerPx: [hitCenter.desktopX, hitCenter.desktopY],
+            headLeftPx: [hitHeadLeft.desktopX, hitHeadLeft.desktopY],
+            headRightPx: [hitHeadRight.desktopX, hitHeadRight.desktopY],
+          },
+          modeToggle: [modeBefore, modeToggled, modeRestored],
+        },
         faceDetection: {
           imageSize: [det.width, det.height],
           rightEye: det.face.rightEye,
@@ -147,10 +194,133 @@ async function runSmokeVerification(win) {
   console.log('[SMOKE_RESULT]', JSON.stringify(result, null, 2));
 }
 
+function registerDesktopIpcHandlers() {
+  ipcMain.handle('desktop:get-sources', async () => {
+    try {
+      const displays = screen.getAllDisplays();
+      const primary = screen.getPrimaryDisplay();
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+
+      return sources.map((src, idx) => {
+        const matched =
+          displays.find((d) => String(d.id) === String(src.display_id)) ||
+          displays[idx] ||
+          primary;
+        const scale = matched?.scaleFactor || 1;
+        const b = matched?.bounds || { x: 0, y: 0, width: 1920, height: 1080 };
+        const isPrimary = matched ? matched.id === primary.id : idx === 0;
+        return {
+          id: src.id,
+          displayId: String(matched?.id ?? idx),
+          name: isPrimary ? `Primary Display (${src.name || idx + 1})` : src.name || `Display ${idx + 1}`,
+          isPrimary,
+          bounds: {
+            x: Math.round(b.x * scale),
+            y: Math.round(b.y * scale),
+            width: Math.round(b.width * scale),
+            height: Math.round(b.height * scale),
+            dipX: b.x,
+            dipY: b.y,
+            dipWidth: b.width,
+            dipHeight: b.height,
+            scaleFactor: scale,
+          },
+        };
+      });
+    } catch (err) {
+      return [];
+    }
+  });
+
+  ipcMain.handle('desktop:set-capture-exclusion', async (_evt, enabled) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    const flag = Boolean(enabled);
+    try {
+      mainWindow.setContentProtection(flag);
+    } catch {
+      // Ignore if unsupported on platform
+    }
+    const hwnd = getWindowHwndNumber(mainWindow);
+    return nativeDesktop.setCaptureExclusion(hwnd, flag);
+  });
+
+  ipcMain.handle('desktop:set-always-on-top', async (_evt, enabled) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    try {
+      mainWindow.setAlwaysOnTop(Boolean(enabled), 'normal');
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('desktop:mouse-event', async (_evt, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    const hwnd = getWindowHwndNumber(mainWindow);
+    return nativeDesktop.sendMouse(hwnd, payload || {});
+  });
+
+  ipcMain.handle('desktop:key-event', async (_evt, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    const hwnd = getWindowHwndNumber(mainWindow);
+    return nativeDesktop.sendKey(hwnd, payload || {});
+  });
+
+  ipcMain.handle('desktop:get-cursor', async () => {
+    return nativeDesktop.send({ type: 'cursor' });
+  });
+
+  ipcMain.handle('desktop:register-shortcut', async (_evt, accelerator) => {
+    try {
+      if (currentShortcut) {
+        globalShortcut.unregister(currentShortcut);
+        currentShortcut = null;
+      }
+      if (!accelerator || typeof accelerator !== 'string') {
+        return { ok: true };
+      }
+      const ok = globalShortcut.register(accelerator, () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('desktop:toggle-mode');
+        }
+      });
+      if (ok) currentShortcut = accelerator;
+      return { ok };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  });
+}
+
 app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media' || permission === 'fullscreen');
+    callback(
+      permission === 'media' ||
+        permission === 'display-capture' ||
+        permission === 'fullscreen',
+    );
   });
+
+  if (session.defaultSession.setDisplayMediaRequestHandler) {
+    session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
+        if (sources.length > 0) {
+          callback({ video: sources[0] });
+        } else {
+          callback({});
+        }
+      } catch {
+        callback({});
+      }
+    });
+  }
+
+  registerDesktopIpcHandlers();
+  nativeDesktop.start();
 
   if (!devUrl) registerAppProtocol();
 
@@ -166,11 +336,13 @@ app.whenReady().then(async () => {
     skipTaskbar: isSmoke,
     focusable: !isSmoke,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
     },
   });
+  mainWindow = win;
 
   const targetUrl = devUrl || (isSmoke ? 'app://bundle/index.html?smoke=1' : 'app://bundle/index.html');
   await win.loadURL(targetUrl);
@@ -183,14 +355,26 @@ app.whenReady().then(async () => {
   if (isSmoke) {
     try {
       await runSmokeVerification(win);
+      nativeDesktop.dispose();
       app.exit(0);
     } catch (err) {
       console.error('[SMOKE_ERROR]', err);
+      nativeDesktop.dispose();
       app.exit(1);
     }
   }
 });
 
+app.on('will-quit', () => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch {
+    // Ignore
+  }
+  nativeDesktop.dispose();
+});
+
 app.on('window-all-closed', () => {
+  nativeDesktop.dispose();
   app.quit();
 });

@@ -66,6 +66,7 @@ The codebase is organized into 9 focused modules under `src/`:
 | **7. Calibration System** | [`src/ui/calibrationWizard.ts`](src/ui/calibrationWizard.ts) | Guided 4-step wizard for physical screen size, webcam mount offsets, reference face capture, and live perspective verification. |
 | **8. User Interface** | [`src/ui/hud.ts`](src/ui/hud.ts), [`src/styles.css`](src/styles.css) | Minimal top control bar, collapsible settings drawer, keyboard shortcuts, and fullscreen auto-hide. |
 | **9. Performance & Debug** | [`src/perf/perfMonitor.ts`](src/perf/perfMonitor.ts), [`src/ui/debugView.ts`](src/ui/debugView.ts) | Zero-allocation FPS / frame-time / p95 ring buffer, telemetry overlay, 3D frustum & screen geometry diagram, and mirrored webcam landmark preview. |
+| **10. Interactive 3D Windows Desktop** | [`src/desktop/desktopCapture.ts`](src/desktop/desktopCapture.ts), [`src/desktop/desktopSurface3D.ts`](src/desktop/desktopSurface3D.ts), [`src/desktop/desktopCoordinates.ts`](src/desktop/desktopCoordinates.ts), [`src/desktop/desktopInteraction.ts`](src/desktop/desktopInteraction.ts), [`electron/nativeDesktop.cjs`](electron/nativeDesktop.cjs), [`electron/preload.cjs`](electron/preload.cjs) | Live Windows 11 desktop capture via WGC/DXGI (`desktopCapturer`), `WDA_EXCLUDEFROMCAPTURE` infinite-mirror prevention, unlit back-wall 3D monitor surface, perspective raycasting, 3D virtual cursor, and native Win32 mouse/keyboard input forwarding. |
 
 ---
 
@@ -155,7 +156,38 @@ Click **Recalibrate** in the top bar (or press `C`) at any time to launch the 4-
 
 ---
 
-## 6. Manual Physical Validation Protocol
+## 6. Interactive Windows Desktop on the 3D Room Back Wall
+
+When running in **Scene 1: Virtual Room**, the back wall of the 3D room embeds a live, fully interactive display of your actual **Windows 11 desktop**.
+
+### 6.1 How Live Desktop Capture Works
+- [`DesktopCaptureManager`](src/desktop/desktopCapture.ts) enumerates all connected Windows displays via Electron's `desktopCapturer` + `screen.getAllDisplays()` in [`electron/main.cjs`](electron/main.cjs) and streams the selected monitor at **60 FPS** (`native`, `1440p`, or `1080p`) into a hardware-decoded `<video>` element and `THREE.VideoTexture` (`SRGBColorSpace`, `LinearFilter`, `generateMipmaps = false`).
+- [`DesktopSurface3D`](src/desktop/desktopSurface3D.ts) mounts the texture inside a 3D monitor bezel on the virtual room's back wall ($z = -d_{\text{desk}}$) using an unlit, fog-free `THREE.MeshBasicMaterial` (`toneMapped: false`) so desktop text, icons, and windows remain razor-sharp under off-axis projection while the surrounding 3D walls, floor, ceiling, bookshelves, and lighting remain visible around it.
+
+### 6.2 How Recursive Capture ("Infinite Mirror") Is Prevented
+- Before starting capture, the application enables **Windows Capture Exclusion** on its own window via Electron's `mainWindow.setContentProtection(true)` (`SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE = 0x11)`) combined with `WS_EX_LAYERED` in [`electron/nativeDesktop.cjs`](electron/nativeDesktop.cjs).
+- Windows DWM omits the 3D Virtual Window from the captured desktop stream and composites the real underlying desktop and applications directly behind it—even when the 3D Virtual Window is maximized or fullscreen on a single monitor.
+
+### 6.3 Perspective Raycasting & Coordinate Mapping
+- Because the back-wall desktop is viewed through an asymmetric off-axis perspective frustum from the user's 3D eye position $\mathbf{e} = (x_e, y_e, z_e)$, screen space $(x_{\text{win}}, y_{\text{win}})$ does **not** map linearly by window size to the desktop.
+- [`raycastDesktopSurface`](src/desktop/desktopCoordinates.ts) maps normalized device coordinates $(\text{ndc}_x, \text{ndc}_y) \in [-1, 1]^2$ to the 3D point $\mathbf{p}_s$ on the physical monitor plane ($z = 0$) and intersects the ray $\mathbf{r}(t) = \mathbf{e} + t(\mathbf{p}_s - \mathbf{e})$ with the 3D desktop plane $z = -d_{\text{desk}}$:
+  $$t = \frac{-d_{\text{desk}} - z_e}{p_{s,z} - z_e}, \quad \mathbf{p}_w = \mathbf{e} + t(\mathbf{p}_s - \mathbf{e})$$
+- The local surface coordinates $(u, v) \in [0, 1]^2$ are converted into physical Windows virtual-screen pixels $(X_{\text{desk}}, Y_{\text{desk}})$ accounting for display resolution, multi-monitor offset $(x_0, y_0)$, and DPI scale factor.
+
+### 6.4 3D Virtual Cursor & Native Input Forwarding
+- **3D Virtual Cursor**: When hovering over the back-wall desktop in Mode A, the native OS cursor is hidden (`cursor: none`) and a high-contrast 3D cursor (`arrow`, `ibeam`, `hand`, `resize`) is rendered directly on the 3D desktop surface at $\mathbf{p}_w$.
+- **Native Win32 Input Injection**: Clicking, double-clicking, right-clicking, dragging windows/scrollbars/text, scrolling the mouse wheel, or typing on the keyboard forwards events through [`DesktopInteractionController`](src/desktop/desktopInteraction.ts) to [`electron/nativeDesktop.cjs`](electron/nativeDesktop.cjs), which briefly applies `WS_EX_TRANSPARENT` (click-through hit-testing) to the 3D window, positions the OS cursor at $(X_{\text{desk}}, Y_{\text{desk}})$, injects hardware mouse/keyboard events (`mouse_event` / `keybd_event`), activates the target Windows application (`WindowFromPoint` $\to$ `SetForegroundWindow`), and restores the cursor seamlessly.
+
+### 6.5 Switching Between Desktop Interaction & 3D App Controls
+- **Mode A — Desktop Interaction (`desktop`)**: Mouse and keyboard operate the Windows 11 desktop on the back wall. Hold `Alt` + move the mouse at any time to simulate 3D head movement when not using a webcam.
+- **Mode B — 3D Application Controls (`app`)**: Mouse and keyboard control the 3D Virtual Window UI, settings drawer, and mouse eye simulator.
+- **How to switch modes**:
+  - Press **`Alt+Shift+D`** (configurable in Settings) or **`F8`** at any time—even when an external Windows app has focus.
+  - Click the **🖥 Desktop Input: ON / 🎮 3D App Input** button in the top bar or the floating **Mode Indicator Pill** in the bottom-right corner.
+
+---
+
+## 7. Manual Physical Validation Protocol
 
 Because the depth illusion depends on a human observer viewing a physical monitor, perform the following checks to physically validate the setup:
 

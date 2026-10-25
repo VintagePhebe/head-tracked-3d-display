@@ -12,7 +12,10 @@ import {
   type SceneId,
 } from './config/config';
 import { PerfMonitor } from './perf/perfMonitor';
-import { centeredScreen, v3, type Vec3 } from './projection/offAxis';
+import { DesktopCaptureManager } from './desktop/desktopCapture';
+import { raycastDesktopSurface } from './desktop/desktopCoordinates';
+import { DesktopInteractionController } from './desktop/desktopInteraction';
+import { centeredScreen, v3, type ScreenRect, type Vec3 } from './projection/offAxis';
 import { canvasRect, measurePlacement } from './projection/screenGeometry';
 import { OffAxisRenderer } from './render/renderer';
 import { SceneManager } from './scenes/sceneManager';
@@ -47,6 +50,56 @@ const scenes = new SceneManager(cfg.screen.widthCm / 100, cfg.screen.heightCm / 
 const perf = new PerfMonitor();
 const mouseSim = new MouseSimulator(cfg.eye.defaultDistanceCm / 100);
 mouseSim.attach(canvas);
+const desktopCapture = new DesktopCaptureManager();
+let lastScreenRect: ScreenRect = centeredScreen(cfg.screen.widthCm / 100, cfg.screen.heightCm / 100);
+let activeCaptureKey = '';
+
+function syncDesktopSurfaceLayout(): void {
+  scenes.room.configureDesktop(
+    {
+      enabled: cfg.desktop.enabled,
+      depthM: cfg.desktop.depthCm / 100,
+      widthScale: cfg.desktop.widthScale,
+      heightScale: cfg.desktop.heightScale,
+      offsetXM: cfg.desktop.offsetXCm / 100,
+      offsetYM: cfg.desktop.offsetYCm / 100,
+      showCursor: cfg.desktop.showCursor,
+    },
+    desktopCapture.getActiveDisplayBounds(),
+  );
+}
+
+const desktopInteraction = new DesktopInteractionController(
+  canvas,
+  scenes.room.desktopSurface,
+  {
+    getEye: () => currentEye,
+    getScreenRect: () => lastScreenRect,
+    getSurfaceSpec: () => scenes.room.desktopSurface.getSpec(),
+    onModeChange(mode) {
+      cfg.desktop.interactionMode = mode;
+      saveConfig(window.localStorage, cfg);
+      mouseSim.desktopInteractionActive = desktopInteraction.isDesktopModeActive();
+      hud.renderBar();
+      hud.renderDrawer();
+      hud.updateModePill(desktopInteraction.getLastHit());
+      hud.showToast(
+        mode === 'desktop'
+          ? `Mode A: Desktop Interaction Active (${cfg.desktop.shortcut} to switch)`
+          : `Mode B: 3D App Controls Active (${cfg.desktop.shortcut} to switch)`,
+        false,
+        2400,
+      );
+    },
+  },
+  {
+    enabled: cfg.desktop.enabled && cfg.render.scene === 'room',
+    interactionEnabled: cfg.desktop.interactionEnabled,
+    mode: cfg.desktop.interactionMode,
+    showCursor: cfg.desktop.showCursor,
+    shortcut: cfg.desktop.shortcut,
+  },
+);
 
 const poseFilter = new HeadPoseFilter(
   v3(0, 0, cfg.eye.defaultDistanceCm / 100),
@@ -155,6 +208,21 @@ const hud = new AppHud(appEl, {
     }
   },
   resetMouseEye: () => mouseSim.reset(),
+  getDesktopSources: () => desktopCapture.getSourcesList(),
+  getDesktopStats: () => desktopCapture.stats,
+  toggleInteractionMode: () => {
+    desktopInteraction.toggleMode();
+  },
+});
+
+desktopCapture.onUpdate((stats) => {
+  scenes.room.desktopSurface.setLiveTexture(desktopCapture.getTexture(), stats.active);
+  syncDesktopSurfaceLayout();
+  hud.renderDrawer();
+});
+
+desktopInteraction.onHitUpdate((hit) => {
+  hud.updateModePill(hit);
 });
 
 function applyConfig(next: AppConfig, persist = true): void {
@@ -175,6 +243,33 @@ function applyConfig(next: AppConfig, persist = true): void {
     renderer.applyQuality(cfg.render.quality);
   }
 
+  // Synchronize 3D Back-Wall Desktop capture & surface layout
+  const nextCaptureKey = `${cfg.desktop.displayId}:${cfg.desktop.fps}:${cfg.desktop.quality}`;
+  if (cfg.desktop.enabled) {
+    if (!desktopCapture.stats.active || nextCaptureKey !== activeCaptureKey) {
+      activeCaptureKey = nextCaptureKey;
+      desktopCapture.start({
+        displayId: cfg.desktop.displayId,
+        fps: cfg.desktop.fps,
+        quality: cfg.desktop.quality,
+      });
+    }
+  } else if (desktopCapture.stats.active) {
+    activeCaptureKey = '';
+    desktopCapture.stop();
+  }
+
+  syncDesktopSurfaceLayout();
+
+  desktopInteraction.updateState({
+    enabled: cfg.desktop.enabled && cfg.render.scene === 'room',
+    interactionEnabled: cfg.desktop.interactionEnabled,
+    mode: cfg.desktop.interactionMode,
+    showCursor: cfg.desktop.showCursor,
+    shortcut: cfg.desktop.shortcut,
+  });
+  mouseSim.desktopInteractionActive = desktopInteraction.isDesktopModeActive();
+
   const defZ = cfg.eye.defaultDistanceCm / 100;
   poseFilter.setDefaultEye(v3(0, 0, defZ));
   poseFilter.setFilterParams(oneEuroFromSettings(cfg.tracking.smoothing, cfg.tracking.responsiveness));
@@ -185,13 +280,15 @@ function applyConfig(next: AppConfig, persist = true): void {
   tracker.wantLandmarks = cfg.debug.preview;
   debugView.syncVisibility(cfg, !!document.fullscreenElement);
   hud.renderBar();
+  hud.updateModePill(desktopInteraction.getLastHit());
 }
 
 applyConfig(cfg, false);
 
-// Keyboard shortcuts for convenience (especially in fullscreen)
+// Keyboard shortcuts for 3D App Control Mode (Mode B)
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (desktopInteraction.isDesktopModeActive()) return;
   const k = e.key.toLowerCase();
   if (k === 'f') {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -223,7 +320,7 @@ document.addEventListener('fullscreenchange', () => {
 
 // Prompt first-time users with a non-intrusive toast pointing to Calibration
 if (!cfg.calibrated && !new URLSearchParams(window.location.search).has('smoke')) {
-  hud.showToast('Move mouse (or click Start Camera) to look through the Virtual Window. Click Recalibrate to match your screen size.', false, 6500);
+  hud.showToast('Windows Desktop is live on the 3D back wall! Press Alt+Shift+D (or F8) anytime to switch between Desktop Input and 3D App Controls.', false, 6500);
 }
 
 // Main real-time render loop
@@ -256,6 +353,10 @@ function animate(nowMs: number): void {
     cfg.screen.windowPeephole && !document.fullscreenElement
       ? canvasRect({ widthM, heightM }, measurePlacement(canvas))
       : centeredScreen(widthM, heightM);
+  lastScreenRect = screenRect;
+
+  desktopCapture.tick(nowMs);
+  desktopInteraction.refreshForHeadMotion();
 
   const proj = renderer.updateCamera(screenRect, currentEye);
 
@@ -299,6 +400,9 @@ requestAnimationFrame(animate);
   renderer,
   scenes,
   perf,
+  desktopCapture,
+  desktopInteraction,
+  raycastDesktopSurface,
   getCurrentEye: () => ({ ...currentEye }),
   getLastProjection: () => renderer.lastProjection,
   estimateEyeFromFace: (face: { rightEye: { x: number; y: number }; leftEye: { x: number; y: number }; foreshortening: number }, w: number, h: number) =>

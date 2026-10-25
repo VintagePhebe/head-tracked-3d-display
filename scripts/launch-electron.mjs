@@ -50,7 +50,7 @@ $pi = New-Object WinDesktopLauncher+PROCESS_INFORMATION
 $cmd = New-Object System.Text.StringBuilder ("\`"" + $exe + "\`" . ${extraArgs}".Trim())
 $ok = [WinDesktopLauncher]::CreateProcessW($exe, $cmd, [IntPtr]::Zero, [IntPtr]::Zero, $false, 0, [IntPtr]::Zero, '${cwd}', [ref]$si, [ref]$pi)
 if (-not $ok) { exit 1 }
-[WinDesktopLauncher]::WaitForSingleObject($pi.hProcess, 0xFFFFFFFF) | Out-Null
+[WinDesktopLauncher]::WaitForSingleObject($pi.hProcess, [uint32]::MaxValue) | Out-Null
 `;
   const child = spawn('powershell.exe', ['-NoProfile', '-Command', psScript], { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code ?? 0));

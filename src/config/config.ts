@@ -9,6 +9,8 @@ export type Quality = 'low' | 'medium' | 'high';
 export type WebcamMount = 'top-center' | 'top-left' | 'top-right' | 'bottom-center' | 'custom';
 export type TargetEyeMode = 'cyclopean' | 'left' | 'right';
 export type StereoMode = 'off' | 'anaglyph';
+export type DesktopInteractionMode = 'desktop' | 'app';
+export type DesktopCaptureQuality = 'native' | '1440p' | '1080p';
 
 export interface AppConfig {
   version: 1;
@@ -70,6 +72,34 @@ export interface AppConfig {
     preview: boolean;
     screenFrame: boolean;
   };
+  desktop: {
+    /** Enable Windows desktop capture on the 3D virtual room's back wall. */
+    enabled: boolean;
+    /** Target Windows display ID ('primary' or Electron display id). */
+    displayId: string;
+    /** Virtual screen distance behind the monitor plane in centimetres. */
+    depthCm: number;
+    /** Virtual screen width scale relative to room width (0.3..1.0). */
+    widthScale: number;
+    /** Virtual screen height scale relative to room height (0.3..1.0). */
+    heightScale: number;
+    /** Horizontal position offset from room centre (cm). */
+    offsetXCm: number;
+    /** Vertical position offset from room centre (cm). */
+    offsetYCm: number;
+    /** Enable forwarding mouse and keyboard input to the Windows desktop. */
+    interactionEnabled: boolean;
+    /** Active input routing mode: 'desktop' (Mode A) or 'app' (Mode B). */
+    interactionMode: DesktopInteractionMode;
+    /** Render perspective-aligned 3D virtual cursor on the desktop surface. */
+    showCursor: boolean;
+    /** Global shortcut to toggle between Mode A (Desktop) and Mode B (3D App). */
+    shortcut: string;
+    /** Capture frame rate (30 or 60 FPS). */
+    fps: 30 | 60;
+    /** Capture resolution preset. */
+    quality: DesktopCaptureQuality;
+  };
 }
 
 export const STORAGE_KEY = 'virtual-window.config.v1';
@@ -101,6 +131,21 @@ export function defaultConfig(): AppConfig {
     tracking: { smoothing: 0.5, responsiveness: 0.5, prediction: true, gain: 1 },
     render: { quality: 'medium', targetFps: 0, scene: 'room', stereo: 'off' },
     debug: { overlay: false, perf: false, view3d: false, preview: false, screenFrame: false },
+    desktop: {
+      enabled: true,
+      displayId: 'primary',
+      depthCm: 70,
+      widthScale: 0.88,
+      heightScale: 0.88,
+      offsetXCm: 0,
+      offsetYCm: 1.5,
+      interactionEnabled: true,
+      interactionMode: 'desktop',
+      showCursor: true,
+      shortcut: 'Alt+Shift+D',
+      fps: 60,
+      quality: 'native',
+    },
   };
 }
 
@@ -153,6 +198,12 @@ const NUM_RANGES: Record<string, Range> = {
   'tracking.responsiveness': [0, 1],
   'tracking.gain': [0.25, 3],
   'render.targetFps': [0, 360],
+  'desktop.depthCm': [20, 250],
+  'desktop.widthScale': [0.3, 1.0],
+  'desktop.heightScale': [0.3, 1.0],
+  'desktop.offsetXCm': [-100, 100],
+  'desktop.offsetYCm': [-100, 100],
+  'desktop.fps': [30, 60],
 };
 const ENUMS: Record<string, readonly string[]> = {
   'webcam.mount': ['top-center', 'top-left', 'top-right', 'bottom-center', 'custom'],
@@ -160,6 +211,8 @@ const ENUMS: Record<string, readonly string[]> = {
   'render.quality': ['low', 'medium', 'high'],
   'render.scene': ['room', 'calibration', 'floating'],
   'render.stereo': ['off', 'anaglyph'],
+  'desktop.interactionMode': ['desktop', 'app'],
+  'desktop.quality': ['native', '1440p', '1080p'],
 };
 
 /**

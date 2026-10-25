@@ -5,7 +5,11 @@ import type { VirtualScene } from './sceneTypes';
 import { VirtualRoomScene } from './virtualRoom';
 
 export class SceneManager {
-  private scenes: Record<SceneId, VirtualScene>;
+  private scenes: {
+    room: VirtualRoomScene;
+    calibration: CalibrationScene;
+    floating: FloatingObjectsScene;
+  };
   private activeId: SceneId;
 
   constructor(widthM: number, heightM: number, initial: SceneId = 'room') {
@@ -15,6 +19,10 @@ export class SceneManager {
       floating: new FloatingObjectsScene(widthM, heightM),
     };
     this.activeId = initial;
+  }
+
+  get room(): VirtualRoomScene {
+    return this.scenes.room;
   }
 
   get active(): VirtualScene {
