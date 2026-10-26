@@ -33,6 +33,7 @@ export interface HudCallbacks {
   getDesktopSources(): DesktopDisplaySource[];
   getDesktopStats(): DesktopCaptureStats;
   toggleInteractionMode(): void;
+  takeScreenshot(): void;
 }
 
 export class AppHud {
@@ -211,6 +212,9 @@ export class AppHud {
         <button type="button" class="vw-btn ${cfg.debug.perf ? 'active' : ''}" id="hud-perf" title="Show/Hide Performance Stats">
           Stats
         </button>
+        <button type="button" class="vw-btn" id="hud-shot" title="Capture Screenshot to Clipboard &amp; Pictures/Screenshots (or press Win+Shift+S / PrintScreen / F12)">
+          📷 Screenshot
+        </button>
         <button type="button" class="vw-btn" id="hud-fs">
           ${isFs ? 'Exit Fullscreen' : 'Enter Fullscreen'}
         </button>
@@ -247,6 +251,7 @@ export class AppHud {
       this.renderBar();
       this.renderDrawer();
     });
+    q('#hud-shot')?.addEventListener('click', () => this.cb.takeScreenshot());
     q('#hud-fs')?.addEventListener('click', () => this.cb.toggleFullscreen());
     q('#hud-settings')?.addEventListener('click', () => this.toggleSettings());
   }

@@ -227,6 +227,23 @@ const hud = new AppHud(appEl, {
   toggleInteractionMode: () => {
     desktopInteraction.toggleMode();
   },
+  async takeScreenshot() {
+    if (window.desktopBridge?.takeScreenshot) {
+      await window.desktopBridge.takeScreenshot();
+      return;
+    }
+    renderer.render(scenes.active.scene);
+    const url = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `VirtualWindow-${Date.now()}.png`;
+    a.click();
+    hud.showToast('📷 Screenshot downloaded!', false, 3800);
+  },
+});
+
+window.desktopBridge?.onScreenshotSaved?.((info) => {
+  hud.showToast(`📷 Screenshot copied to Clipboard & saved (${info.filePath})`, false, 4800);
 });
 
 desktopCapture.onUpdate((stats) => {

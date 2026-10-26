@@ -14,6 +14,7 @@ const readline = require('node:readline');
 const CSHARP_SOURCE = `
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 public static class Win32DesktopBridge {
@@ -86,6 +87,15 @@ public static class Win32DesktopBridge {
     [DllImport("user32.dll")]
     public static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
 
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT {
         public int X;
@@ -101,9 +111,74 @@ public static class Win32DesktopBridge {
     }
 
     private static IntPtr lastTargetWindow = IntPtr.Zero;
+    private static readonly object consoleLock = new object();
+    private static bool holdActive = false;
+    private static bool lastPrtScn = false;
+    private static DateTime lastTriggerUtc = DateTime.MinValue;
+
+    public static void WriteLineSync(string line) {
+        lock (consoleLock) {
+            Console.WriteLine(line);
+            Console.Out.Flush();
+        }
+    }
+
+    private static bool IsScreenshotHotKeyOrToolActive() {
+        bool winDown = ((GetAsyncKeyState(0x5B) & 0x8000) != 0) || ((GetAsyncKeyState(0x5C) & 0x8000) != 0);
+        bool prtScnDown = (GetAsyncKeyState(0x2C) & 0x8000) != 0;
+        if (winDown || prtScnDown) return true;
+
+        IntPtr fg = GetForegroundWindow();
+        if (fg != IntPtr.Zero) {
+            StringBuilder sbTitle = new StringBuilder(128);
+            GetWindowText(fg, sbTitle, 128);
+            string title = sbTitle.ToString();
+
+            StringBuilder sbClass = new StringBuilder(128);
+            GetClassName(fg, sbClass, 128);
+            string cls = sbClass.ToString();
+
+            if (title.IndexOf("Snipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                title.IndexOf("ScreenClipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                title.IndexOf("Screenshot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                title.IndexOf("ShareX", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                title.IndexOf("Lightshot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                cls.IndexOf("ScreenClipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                cls.IndexOf("Microsoft.ScreenSketch", StringComparison.OrdinalIgnoreCase) >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public static void Init() {
         try { SetProcessDPIAware(); } catch {}
+        Thread watcher = new Thread(() => {
+            while (true) {
+                try {
+                    bool prt = (GetAsyncKeyState(0x2C) & 0x8000) != 0;
+                    if (prt && !lastPrtScn) {
+                        WriteLineSync("{\\"id\\":0,\\"event\\":\\"print_screen\\"}");
+                    }
+                    lastPrtScn = prt;
+
+                    bool trig = IsScreenshotHotKeyOrToolActive();
+                    if (trig) {
+                        lastTriggerUtc = DateTime.UtcNow;
+                        if (!holdActive) {
+                            holdActive = true;
+                            WriteLineSync("{\\"id\\":0,\\"event\\":\\"screenshot_hold\\",\\"active\\":true}");
+                        }
+                    } else if (holdActive && (DateTime.UtcNow - lastTriggerUtc).TotalMilliseconds > 4500) {
+                        holdActive = false;
+                        WriteLineSync("{\\"id\\":0,\\"event\\":\\"screenshot_hold\\",\\"active\\":false}");
+                    }
+                } catch {}
+                Thread.Sleep(15);
+            }
+        });
+        watcher.IsBackground = true;
+        watcher.Start();
     }
 
     public static bool ConfigureCaptureExclusion(long hwndVal, bool exclude) {
@@ -255,7 +330,7 @@ Add-Type -TypeDefinition @'
 ${CSHARP_SOURCE}
 '@
 [Win32DesktopBridge]::Init()
-Write-Output '{"id":0,"ready":true}'
+[Win32DesktopBridge]::WriteLineSync('{"id":0,"ready":true}')
 while ($null -ne ($line = [Console]::ReadLine())) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   try {
@@ -264,7 +339,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
     switch ($cmd.type) {
       'exclude' {
         $ok = [Win32DesktopBridge]::ConfigureCaptureExclusion([long]$cmd.hwnd, [bool]$cmd.exclude)
-        Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $ok })
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $ok }))
       }
       'mouse' {
         $cursor = [Win32DesktopBridge]::PerformMouse(
@@ -278,7 +353,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
           [int]$cmd.wheelDeltaX,
           [int]$cmd.wheelDeltaY
         )
-        Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $true; cursor = $cursor })
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $true; cursor = $cursor }))
       }
       'key' {
         $ok = [Win32DesktopBridge]::PerformKey(
@@ -287,18 +362,18 @@ while ($null -ne ($line = [Console]::ReadLine())) {
           [int]$cmd.vk,
           [bool]$cmd.extended
         )
-        Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $ok })
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $ok }))
       }
       'cursor' {
         $cursor = [Win32DesktopBridge]::GetSystemCursorKind()
-        Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $true; cursor = $cursor })
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $true; cursor = $cursor }))
       }
       default {
-        Write-Output (ConvertTo-Json -Compress @{ id = $id; ok = $false; error = 'unknown_type' })
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $false; error = 'unknown_type' }))
       }
     }
   } catch {
-    Write-Output (ConvertTo-Json -Compress @{ id = 0; ok = $false; error = $_.Exception.Message })
+    [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = 0; ok = $false; error = $_.Exception.Message }))
   }
 }
 `;
@@ -309,6 +384,7 @@ class NativeDesktopHelper {
     this.nextId = 1;
     this.pending = new Map();
     this.readyPromise = null;
+    this.onEvent = null;
   }
 
   start() {
@@ -337,6 +413,12 @@ class NativeDesktopHelper {
             const msg = JSON.parse(trimmed);
             if (msg.id === 0 && msg.ready) {
               resolve(true);
+              return;
+            }
+            if (msg.id === 0 && msg.event) {
+              if (typeof this.onEvent === 'function') {
+                this.onEvent(msg);
+              }
               return;
             }
             const handler = this.pending.get(msg.id);

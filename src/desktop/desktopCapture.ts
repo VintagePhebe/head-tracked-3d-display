@@ -44,6 +44,10 @@ export interface DesktopBridgeApi {
   getCursorShape(): Promise<{ ok: boolean; cursor?: string }>;
   registerModeShortcut(accelerator: string): Promise<{ ok: boolean }>;
   onToggleModeShortcut(callback: () => void): () => void;
+  takeScreenshot?(): Promise<{ ok: boolean; filePath?: string; error?: string }>;
+  setAllowScreenshots?(allow: boolean): Promise<{ ok: boolean; allowScreenshots?: boolean }>;
+  onScreenshotHold?(callback: (hold: boolean) => void): () => void;
+  onScreenshotSaved?(callback: (info: { filePath: string }) => void): () => void;
 }
 
 declare global {
@@ -74,6 +78,11 @@ export interface DesktopCaptureStats {
 export class DesktopCaptureManager {
   private video: HTMLVideoElement;
   private texture: THREE.VideoTexture;
+  private freezeCanvas: HTMLCanvasElement;
+  private freezeCtx: CanvasRenderingContext2D;
+  private freezeTexture: THREE.CanvasTexture;
+  private screenshotHold = false;
+  private lastFreezeSnapMs = 0;
   private stream: MediaStream | null = null;
   private sources: DesktopDisplaySource[] = [];
   private activeSource: DesktopDisplaySource | null = null;
@@ -106,10 +115,55 @@ export class DesktopCaptureManager {
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.magFilter = THREE.LinearFilter;
     this.texture.generateMipmaps = false;
+
+    this.freezeCanvas = document.createElement('canvas');
+    this.freezeCanvas.width = 1920;
+    this.freezeCanvas.height = 1080;
+    this.freezeCtx = this.freezeCanvas.getContext('2d')!;
+    this.freezeTexture = new THREE.CanvasTexture(this.freezeCanvas);
+    this.freezeTexture.colorSpace = THREE.SRGBColorSpace;
+    this.freezeTexture.minFilter = THREE.LinearFilter;
+    this.freezeTexture.magFilter = THREE.LinearFilter;
+    this.freezeTexture.generateMipmaps = false;
+
+    window.desktopBridge?.onScreenshotHold?.((hold) => {
+      this.setScreenshotHold(hold);
+    });
   }
 
-  getTexture(): THREE.VideoTexture {
-    return this.texture;
+  private captureCleanFrameToCanvas(): void {
+    const vw = this.video.videoWidth;
+    const vh = this.video.videoHeight;
+    if (this.video.readyState >= 2 && vw > 0 && vh > 0) {
+      if (this.freezeCanvas.width !== vw || this.freezeCanvas.height !== vh) {
+        this.freezeCanvas.width = vw;
+        this.freezeCanvas.height = vh;
+      }
+      this.freezeCtx.drawImage(this.video, 0, 0, vw, vh);
+      this.freezeTexture.needsUpdate = true;
+    }
+  }
+
+  setScreenshotHold(hold: boolean): void {
+    if (this.screenshotHold === hold) return;
+    if (hold) {
+      // Snapshot the clean desktop frame BEFORE WDA_EXCLUDEFROMCAPTURE is lifted
+      this.captureCleanFrameToCanvas();
+      this.screenshotHold = true;
+      this.stats.excludeFromCapture = false;
+    } else {
+      this.screenshotHold = false;
+      this.stats.excludeFromCapture = true;
+    }
+    this.notify();
+  }
+
+  isScreenshotHold(): boolean {
+    return this.screenshotHold;
+  }
+
+  getTexture(): THREE.Texture {
+    return this.screenshotHold ? this.freezeTexture : this.texture;
   }
 
   getVideoElement(): HTMLVideoElement {
@@ -313,6 +367,10 @@ export class DesktopCaptureManager {
    */
   tick(nowMs: number): void {
     if (!this.stats.active) return;
+    if (!this.screenshotHold && nowMs - this.lastFreezeSnapMs > 400) {
+      this.lastFreezeSnapMs = nowMs;
+      this.captureCleanFrameToCanvas();
+    }
     if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
       if (
         this.stats.width !== this.video.videoWidth ||

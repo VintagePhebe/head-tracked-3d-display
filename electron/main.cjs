@@ -7,6 +7,7 @@ const {
   desktopCapturer,
   screen,
   globalShortcut,
+  clipboard,
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -17,6 +18,78 @@ const devUrl = process.env.VITE_DEV_SERVER_URL;
 const nativeDesktop = new NativeDesktopHelper();
 let mainWindow = null;
 let currentShortcut = null;
+let wantCaptureExclusion = true;
+let autoScreenshotHold = false;
+let manualAllowCapture = false;
+let resumeTimer = null;
+
+async function applyWindowExclusion(exclude) {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+  const flag = Boolean(exclude);
+  try {
+    mainWindow.setContentProtection(flag);
+  } catch {
+    // Ignore if unsupported on platform
+  }
+  const hwnd = getWindowHwndNumber(mainWindow);
+  nativeDesktop.setCaptureExclusion(hwnd, flag).catch(() => {});
+  return { ok: true };
+}
+
+function syncEffectiveScreenshotHold() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const shouldHold = manualAllowCapture || autoScreenshotHold;
+  if (resumeTimer) {
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
+  if (shouldHold) {
+    // 1. Freeze 3D back-wall desktop texture on its clean frame first
+    mainWindow.webContents.send('desktop:screenshot-hold', true);
+    // 2. Disable WDA_EXCLUDEFROMCAPTURE 8ms later so Win+Shift+S / Snipping Tool sees the window
+    setTimeout(() => {
+      if (manualAllowCapture || autoScreenshotHold) {
+        applyWindowExclusion(false);
+      }
+    }, 8);
+  } else if (wantCaptureExclusion) {
+    // 1. Re-enable WDA_EXCLUDEFROMCAPTURE first
+    applyWindowExclusion(true);
+    // 2. Wait 160ms for DWM capture pipeline to flush before unfreezing 3D back-wall video
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      if (!manualAllowCapture && !autoScreenshotHold && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('desktop:screenshot-hold', false);
+      }
+    }, 160);
+  } else {
+    mainWindow.webContents.send('desktop:screenshot-hold', false);
+  }
+}
+
+async function captureWindowScreenshot() {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+  try {
+    const img = await mainWindow.webContents.capturePage();
+    clipboard.writeImage(img);
+    const picturesDir = app.getPath('pictures');
+    const shotsDir = path.join(picturesDir, 'Screenshots');
+    try {
+      await fs.promises.mkdir(shotsDir, { recursive: true });
+    } catch {
+      // Ignore
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filePath = path.join(shotsDir, `VirtualWindow-${stamp}.png`);
+    await fs.promises.writeFile(filePath, img.toPNG());
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('desktop:screenshot-saved', { filePath });
+    }
+    return { ok: true, filePath };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -236,15 +309,21 @@ function registerDesktopIpcHandlers() {
   });
 
   ipcMain.handle('desktop:set-capture-exclusion', async (_evt, enabled) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
-    const flag = Boolean(enabled);
-    try {
-      mainWindow.setContentProtection(flag);
-    } catch {
-      // Ignore if unsupported on platform
+    wantCaptureExclusion = Boolean(enabled);
+    if (manualAllowCapture || autoScreenshotHold) {
+      return applyWindowExclusion(false);
     }
-    const hwnd = getWindowHwndNumber(mainWindow);
-    return nativeDesktop.setCaptureExclusion(hwnd, flag);
+    return applyWindowExclusion(wantCaptureExclusion);
+  });
+
+  ipcMain.handle('desktop:set-allow-screenshots', async (_evt, allow) => {
+    manualAllowCapture = Boolean(allow);
+    syncEffectiveScreenshotHold();
+    return { ok: true, allowScreenshots: manualAllowCapture };
+  });
+
+  ipcMain.handle('desktop:take-screenshot', async () => {
+    return captureWindowScreenshot();
   });
 
   ipcMain.handle('desktop:set-always-on-top', async (_evt, enabled) => {
@@ -320,6 +399,15 @@ app.whenReady().then(async () => {
   }
 
   registerDesktopIpcHandlers();
+  nativeDesktop.onEvent = (msg) => {
+    if (isSmoke) return;
+    if (msg.event === 'screenshot_hold') {
+      autoScreenshotHold = Boolean(msg.active);
+      syncEffectiveScreenshotHold();
+    } else if (msg.event === 'print_screen') {
+      captureWindowScreenshot();
+    }
+  };
   nativeDesktop.start();
 
   if (!devUrl) registerAppProtocol();
@@ -343,6 +431,16 @@ app.whenReady().then(async () => {
     },
   });
   mainWindow = win;
+
+  win.webContents.on('before-input-event', (_event, input) => {
+    if (isSmoke || input.type !== 'keyDown') return;
+    if (input.key === 'Meta' || input.key === 'Super' || input.code === 'MetaLeft' || input.code === 'MetaRight') {
+      autoScreenshotHold = true;
+      syncEffectiveScreenshotHold();
+    } else if (input.key === 'F12' && !input.control && !input.alt) {
+      captureWindowScreenshot();
+    }
+  });
 
   const targetUrl = devUrl || (isSmoke ? 'app://bundle/index.html?smoke=1' : 'app://bundle/index.html');
   await win.loadURL(targetUrl);

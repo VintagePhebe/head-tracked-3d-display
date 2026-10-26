@@ -49,4 +49,34 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     ipcRenderer.on('desktop:toggle-mode', listener);
     return () => ipcRenderer.removeListener('desktop:toggle-mode', listener);
   },
+
+  /**
+   * Capture a screenshot of the 3D window directly to the Windows Clipboard and Pictures/Screenshots.
+   */
+  takeScreenshot: () => ipcRenderer.invoke('desktop:take-screenshot'),
+
+  /**
+   * Manually allow or block OS screen capture (Win+Shift+S / OBS / Discord) while freezing
+   * the 3D back-wall desktop frame to avoid infinite-mirror recursion.
+   */
+  setAllowScreenshots: (allow) => ipcRenderer.invoke('desktop:set-allow-screenshots', Boolean(allow)),
+
+  /**
+   * Subscribe to automatic or manual screenshot-hold transitions so the 3D back-wall
+   * texture freezes its clean frame before WDA_EXCLUDEFROMCAPTURE is lifted.
+   */
+  onScreenshotHold: (callback) => {
+    const listener = (_evt, hold) => callback(Boolean(hold));
+    ipcRenderer.on('desktop:screenshot-hold', listener);
+    return () => ipcRenderer.removeListener('desktop:screenshot-hold', listener);
+  },
+
+  /**
+   * Subscribe to screenshot-saved notifications.
+   */
+  onScreenshotSaved: (callback) => {
+    const listener = (_evt, info) => callback(info);
+    ipcRenderer.on('desktop:screenshot-saved', listener);
+    return () => ipcRenderer.removeListener('desktop:screenshot-saved', listener);
+  },
 });
