@@ -84,8 +84,6 @@ export class DesktopInteractionController {
   private activeButton: 'left' | 'right' | 'middle' = 'left';
   private downClientX = 0;
   private downClientY = 0;
-  private virtualClientX = -1;
-  private virtualClientY = -1;
   private downDesktopX = 0;
   private downDesktopY = 0;
   private hasMovedDuringPress = false;
@@ -155,6 +153,14 @@ export class DesktopInteractionController {
     return next;
   }
 
+  exitDesktopMode(): void {
+    if (this.state.mode !== 'app') {
+      this.state.mode = 'app';
+      this.syncModeVisuals();
+      this.callbacks.onModeChange('app');
+    }
+  }
+
   private syncGlobalShortcut(shortcut: string): void {
     if (window.desktopBridge?.registerModeShortcut) {
       window.desktopBridge.registerModeShortcut(shortcut);
@@ -215,28 +221,15 @@ export class DesktopInteractionController {
   }
 
   /**
-   * Re-project the 3D virtual cursor when the viewer's head moves even if the mouse is stationary.
+   * Keep the 3D virtual cursor anchored to its current desktop coordinate when the viewer's
+   * head moves (do not re-raycast from fixed window coordinates on head motion, which would
+   * cause the desktop cursor to drift off icons/buttons whenever the head moves).
    */
   refreshForHeadMotion(): void {
-    if (!this.state.enabled) return;
-    if (this.virtualClientX < 0 || this.virtualClientY < 0) {
-      const rect = this.canvas.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        this.virtualClientX = rect.left + rect.width * 0.5;
-        this.virtualClientY = rect.top + rect.height * 0.5;
-      } else {
-        return;
-      }
-    }
-    const hit = this.raycastAtClient(this.virtualClientX, this.virtualClientY);
-    if (hit && this.isDesktopModeActive()) {
-      this.canvas.style.cursor = this.state.showCursor ? 'none' : '';
-      this.surface3D.updateCursor(
-        hit.worldPoint.x,
-        hit.worldPoint.y,
-        this.state.showCursor,
-        this.isPressed,
-      );
+    if (!this.state.enabled || !this.isDesktopModeActive()) return;
+    if (!this.lastHit) {
+      const spec = this.callbacks.getSurfaceSpec();
+      this.surface3D.updateCursor(spec.centerX, spec.centerY, this.state.showCursor, this.isPressed);
     }
   }
 
@@ -269,8 +262,6 @@ export class DesktopInteractionController {
       return;
     }
 
-    this.virtualClientX = e.clientX;
-    this.virtualClientY = e.clientY;
     const hit = this.raycastAtClient(e.clientX, e.clientY);
 
     if (this.isPressed) {
@@ -280,8 +271,8 @@ export class DesktopInteractionController {
     }
 
     if (hit && this.isDesktopModeActive()) {
-      // Always hide native cursor on the 3D room canvas and clamp the 3D cursor inside the virtual screen
-      this.canvas.style.cursor = this.state.showCursor ? 'none' : '';
+      // Hide native cursor only while inside the virtual screen; show native cursor outside so HUD is easy to click
+      this.canvas.style.cursor = hit.inside && this.state.showCursor ? 'none' : '';
       this.surface3D.updateCursor(
         hit.worldPoint.x,
         hit.worldPoint.y,
@@ -300,7 +291,7 @@ export class DesktopInteractionController {
     if (e.altKey) return;
 
     const hit = this.raycastAtClient(e.clientX, e.clientY);
-    if (!hit) return;
+    if (!hit || !hit.inside) return;
 
     e.preventDefault();
     e.stopPropagation();
@@ -316,8 +307,6 @@ export class DesktopInteractionController {
     this.hasMovedDuringPress = false;
     this.downClientX = e.clientX;
     this.downClientY = e.clientY;
-    this.virtualClientX = e.clientX;
-    this.virtualClientY = e.clientY;
     this.downDesktopX = hit.desktopX;
     this.downDesktopY = hit.desktopY;
     this.activeButton = e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left';
@@ -421,10 +410,17 @@ export class DesktopInteractionController {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (matchShortcut(e, this.state.shortcut)) {
+    if (matchShortcut(e, this.state.shortcut) || e.code === 'F8') {
       e.preventDefault();
       e.stopPropagation();
       this.toggleMode();
+      return;
+    }
+
+    if (this.isDesktopModeActive() && e.code === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.exitDesktopMode();
       return;
     }
 
@@ -452,7 +448,7 @@ export class DesktopInteractionController {
   }
 
   private handleKeyUp(e: KeyboardEvent): void {
-    if (matchShortcut(e, this.state.shortcut)) {
+    if (matchShortcut(e, this.state.shortcut) || e.code === 'F8' || e.code === 'Escape') {
       e.preventDefault();
       return;
     }

@@ -243,10 +243,10 @@ export class VirtualRoomScene implements VirtualScene {
     canvasMesh.position.set(0, artY, -d + 0.015);
     this.classicDecor.add(canvasMesh);
 
-    // 4. Desk / console table in the mid-to-back zone (lowered when back-wall desktop is active)
+    // 4. Desk / console table in the mid-to-back zone (part of classicDecor so back-wall OS desktop is unobstructed)
     const deskW = w * 0.58;
     const deskD = d * 0.24;
-    const deskH = this.desktopEnabled ? h * 0.12 : h * 0.34;
+    const deskH = h * 0.34;
     const deskZ = -d * 0.72;
     const deskTopY = -hh + deskH;
     const woodMat = new THREE.MeshStandardMaterial({ color: 0x6e472b, roughness: 0.55, metalness: 0.08 });
@@ -256,7 +256,7 @@ export class VirtualRoomScene implements VirtualScene {
     deskTop.position.set(0, deskTopY, deskZ);
     deskTop.castShadow = true;
     deskTop.receiveShadow = true;
-    this.root.add(deskTop);
+    this.classicDecor.add(deskTop);
 
     const legGeo = new THREE.CylinderGeometry(0.007, 0.007, deskH, 12);
     for (const lx of [-deskW * 0.45, deskW * 0.45]) {
@@ -264,7 +264,7 @@ export class VirtualRoomScene implements VirtualScene {
         const leg = new THREE.Mesh(legGeo, darkMetal);
         leg.position.set(lx, -hh + deskH / 2, deskZ + lz);
         leg.castShadow = true;
-        this.root.add(leg);
+        this.classicDecor.add(leg);
       }
     }
 
@@ -297,12 +297,12 @@ export class VirtualRoomScene implements VirtualScene {
     const lampZ = deskZ + deskD * 0.1;
     const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, 0.008, 20), darkMetal);
     lampBase.position.set(lampX, deskTopY + 0.008, lampZ);
-    this.root.add(lampBase);
+    this.classicDecor.add(lampBase);
 
     const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, h * 0.26, 10), darkMetal);
     lampStem.position.set(lampX, deskTopY + h * 0.13, lampZ);
     lampStem.rotation.z = 0.22;
-    this.root.add(lampStem);
+    this.classicDecor.add(lampStem);
 
     const lampHead = new THREE.Mesh(
       new THREE.ConeGeometry(0.024, 0.036, 20, 1, true),
@@ -310,18 +310,18 @@ export class VirtualRoomScene implements VirtualScene {
     );
     lampHead.position.set(lampX - 0.022, deskTopY + h * 0.25, lampZ + 0.01);
     lampHead.rotation.z = 0.45;
-    this.root.add(lampHead);
+    this.classicDecor.add(lampHead);
 
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.009, 12, 12),
       new THREE.MeshBasicMaterial({ color: 0xfef08a }),
     );
     bulb.position.copy(lampHead.position).add(new THREE.Vector3(-0.004, -0.008, 0));
-    this.root.add(bulb);
+    this.classicDecor.add(bulb);
 
     const lampLight = new THREE.PointLight(0xfde68a, 0.9, d * 0.9, 1.8);
     lampLight.position.copy(bulb.position);
-    this.root.add(lampLight);
+    this.classicDecor.add(lampLight);
 
     // Ceramic mug on left of desk
     const mug = new THREE.Mesh(
@@ -330,7 +330,7 @@ export class VirtualRoomScene implements VirtualScene {
     );
     mug.position.set(-deskW * 0.3, deskTopY + 0.022, deskZ + deskD * 0.18);
     mug.castShadow = true;
-    this.root.add(mug);
+    this.classicDecor.add(mug);
 
     // 5. Side-wall shelves at staggered depths (strong lateral parallax cues)
     const shelfBookColors = [0x38bdf8, 0xf97316, 0xa855f7, 0x22c55e, 0xeab308, 0xec4899];
@@ -344,7 +344,7 @@ export class VirtualRoomScene implements VirtualScene {
       board.position.set(sx, sy, sz);
       board.castShadow = true;
       board.receiveShadow = true;
-      this.root.add(board);
+      this.classicDecor.add(board);
 
       // Books standing on the shelf
       for (let b = 0; b < 5; b++) {
@@ -359,7 +359,7 @@ export class VirtualRoomScene implements VirtualScene {
         );
         book.position.set(sx, sy + 0.005 + bh / 2, sz - sd * 0.3 + b * (bt + 0.003));
         book.castShadow = true;
-        this.root.add(book);
+        this.classicDecor.add(book);
       }
     };
     addShelfUnit(-1, 0.18, 0.28);
@@ -412,9 +412,9 @@ export class VirtualRoomScene implements VirtualScene {
         new THREE.MeshBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.45 }),
       );
       tether.position.set(pos[0], pos[1] + tetherLen / 2, pos[2]);
-      this.root.add(tether);
+      this.classicDecor.add(tether);
 
-      this.root.add(group);
+      this.classicDecor.add(group);
       this.animated.push({
         mesh: core,
         baseY: pos[1],
@@ -427,7 +427,7 @@ export class VirtualRoomScene implements VirtualScene {
     };
 
     const rScale = Math.min(w, h);
-    const fx = this.desktopEnabled ? 0.39 : 0.22;
+    const fx = 0.22;
     // Near foreground sculpture (just 14% of room depth behind the screen glass!)
     addFloating(
       new THREE.OctahedronGeometry(rScale * 0.046, 0),
@@ -444,16 +444,14 @@ export class VirtualRoomScene implements VirtualScene {
       [w * fx, -h * 0.22, -d * 0.3],
       2.1,
     );
-    if (!this.desktopEnabled) {
-      // Deep midground torus knot (48% of room depth)
-      addFloating(
-        new THREE.TorusKnotGeometry(rScale * 0.038, rScale * 0.011, 64, 12),
-        0xa855f7,
-        0x7e22ce,
-        [-w * 0.04, h * 0.2, -d * 0.48],
-        4.2,
-      );
-    }
+    // Deep midground torus knot (48% of room depth)
+    addFloating(
+      new THREE.TorusKnotGeometry(rScale * 0.038, rScale * 0.011, 64, 12),
+      0xa855f7,
+      0x7e22ce,
+      [-w * 0.04, h * 0.2, -d * 0.48],
+      4.2,
+    );
 
     // 7. Floor planter in front-right corner (z = -0.22 d)
     const potH = h * 0.16;
@@ -463,7 +461,7 @@ export class VirtualRoomScene implements VirtualScene {
     );
     pot.position.set(w * 0.34, -hh + potH / 2, -d * 0.22);
     pot.castShadow = true;
-    this.root.add(pot);
+    this.classicDecor.add(pot);
 
     const foliage = new THREE.Mesh(
       new THREE.DodecahedronGeometry(0.032, 1),
@@ -471,7 +469,7 @@ export class VirtualRoomScene implements VirtualScene {
     );
     foliage.position.set(w * 0.34, -hh + potH + 0.022, -d * 0.22);
     foliage.castShadow = true;
-    this.root.add(foliage);
+    this.classicDecor.add(foliage);
 
     this.screenFrame = buildScreenOutline(w, h);
     this.screenFrame.visible = this.frameVisible;

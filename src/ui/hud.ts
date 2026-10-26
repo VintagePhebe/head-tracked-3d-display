@@ -158,12 +158,19 @@ export class AppHud {
     const coordsTxt =
       hit && hit.inside
         ? `<span class="vw-mode-coords">[${hit.desktopX}, ${hit.desktopY}]</span>`
-        : `<span class="vw-mode-coords">(${cfg.desktop.shortcut})</span>`;
+        : '';
 
-    this.modePillEl.innerHTML = `
+    this.modePillEl.innerHTML = isDesk
+      ? `
       <span class="vw-mode-dot"></span>
-      <span>${isDesk ? 'Mode A: Desktop Interaction' : 'Mode B: 3D App Controls'}</span>
+      <span>🖥 Desktop Mode Active</span>
       ${coordsTxt}
+      <span class="vw-mode-coords" style="color:#fca5a5;font-weight:600;">✕ Exit (Esc / F8)</span>
+    `
+      : `
+      <span class="vw-mode-dot"></span>
+      <span>🎮 3D App Controls</span>
+      <span class="vw-mode-coords">🖥 Enter Desktop Mode (F8 / ${cfg.desktop.shortcut})</span>
     `;
   }
 
@@ -203,8 +210,8 @@ export class AppHud {
         <button type="button" class="vw-btn" id="hud-center" title="Align all 3D room axes to your current head position [Alt+Shift+R or R]">
           ⊕ Center View
         </button>
-        <button type="button" class="vw-btn ${isDeskMode ? 'active' : ''}" id="hud-desk-mode" title="Toggle between Mode A (Desktop Interaction) and Mode B (3D App Controls) [${cfg.desktop.shortcut}]">
-          ${isDeskMode ? '🖥 Desktop Input: ON' : '🎮 3D App Input'}
+        <button type="button" class="vw-btn ${isDeskMode ? 'danger' : 'primary'}" id="hud-desk-mode" title="Toggle between Desktop Interaction (Mode A) and 3D App Controls (Mode B) [Esc / F8 / ${cfg.desktop.shortcut}]">
+          ${isDeskMode ? '✕ Exit Desktop Mode (Esc / F8)' : '🖥 Enter Desktop Mode'}
         </button>
         <button type="button" class="vw-btn" id="hud-cal">Recalibrate</button>
         <select id="hud-scene" class="vw-select" aria-label="Select Scene">

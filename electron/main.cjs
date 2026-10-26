@@ -332,7 +332,10 @@ function registerDesktopIpcHandlers() {
   ipcMain.handle('desktop:set-always-on-top', async (_evt, enabled) => {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
     try {
-      mainWindow.setAlwaysOnTop(Boolean(enabled), 'normal');
+      const flag = Boolean(enabled);
+      mainWindow.setAlwaysOnTop(flag, flag ? 'screen-saver' : 'normal');
+      const hwnd = getWindowHwndNumber(mainWindow);
+      nativeDesktop.setDesktopModeWindowFlags(hwnd, flag).catch(() => {});
       return { ok: true };
     } catch (err) {
       return { ok: false, error: String(err) };
@@ -361,14 +364,21 @@ function registerDesktopIpcHandlers() {
         globalShortcut.unregister(currentShortcut);
         currentShortcut = null;
       }
-      if (!accelerator || typeof accelerator !== 'string') {
-        return { ok: true };
-      }
-      const ok = globalShortcut.register(accelerator, () => {
+      globalShortcut.unregister('F8');
+      const triggerToggle = () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('desktop:toggle-mode');
         }
-      });
+      };
+      try {
+        globalShortcut.register('F8', triggerToggle);
+      } catch {
+        // Ignore if F8 is already bound
+      }
+      if (!accelerator || typeof accelerator !== 'string') {
+        return { ok: true };
+      }
+      const ok = globalShortcut.register(accelerator, triggerToggle);
       if (ok) currentShortcut = accelerator;
       return { ok };
     } catch (err) {
@@ -437,7 +447,7 @@ app.whenReady().then(async () => {
 
   win.webContents.on('before-input-event', (_event, input) => {
     if (isSmoke || input.type !== 'keyDown') return;
-    if (input.key === 'Meta' || input.key === 'Super' || input.code === 'MetaLeft' || input.code === 'MetaRight') {
+    if (input.meta && input.shift && input.code === 'KeyS') {
       autoScreenshotHold = true;
       syncEffectiveScreenshotHold();
     } else if (input.key === 'F12' && !input.control && !input.alt) {
@@ -449,6 +459,7 @@ app.whenReady().then(async () => {
   await win.loadURL(targetUrl);
 
   if (!isSmoke) {
+    win.maximize();
     win.show();
     win.focus();
   }

@@ -42,6 +42,17 @@ let cfg: AppConfig = loadConfig(window.localStorage);
 if (cfg.desktop.shortcut === 'F8') {
   cfg.desktop.shortcut = 'Alt+Shift+D';
 }
+if (
+  cfg.desktop.widthScale === 0.88 &&
+  cfg.desktop.heightScale === 0.88 &&
+  cfg.desktop.offsetYCm === 1.5
+) {
+  cfg.desktop.widthScale = 0.96;
+  cfg.desktop.heightScale = 0.96;
+  cfg.desktop.offsetYCm = 0;
+  cfg.desktop.depthCm = 48;
+  saveConfig(window.localStorage, cfg);
+}
 if (cfg.screen.autoResolution) {
   const dpr = window.devicePixelRatio || 1;
   cfg.screen.resolutionX = Math.round(window.screen.width * dpr);
@@ -89,10 +100,10 @@ const desktopInteraction = new DesktopInteractionController(
       hud.updateModePill(desktopInteraction.getLastHit());
       hud.showToast(
         mode === 'desktop'
-          ? `Mode A: Desktop Interaction Active (${cfg.desktop.shortcut} to switch)`
-          : `Mode B: 3D App Controls Active (${cfg.desktop.shortcut} to switch)`,
+          ? `🖥 Desktop Mode Active — Press Esc, F8, or ${cfg.desktop.shortcut} (or click Exit Desktop Mode) to exit`
+          : `🎮 Exited Desktop Mode — 3D App Controls Active (Press F8 or ${cfg.desktop.shortcut} for Desktop Mode)`,
         false,
-        2400,
+        2800,
       );
     },
   },

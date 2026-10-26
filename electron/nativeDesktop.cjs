@@ -21,6 +21,7 @@ public static class Win32DesktopBridge {
     public const int GWL_EXSTYLE = -20;
     public const long WS_EX_LAYERED = 0x00080000L;
     public const long WS_EX_TRANSPARENT = 0x00000020L;
+    public const long WS_EX_NOACTIVATE = 0x08000000L;
     public const uint LWA_ALPHA = 0x00000002u;
     public const uint WDA_NONE = 0x00000000u;
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011u;
@@ -125,8 +126,10 @@ public static class Win32DesktopBridge {
 
     private static bool IsScreenshotHotKeyOrToolActive() {
         bool winDown = ((GetAsyncKeyState(0x5B) & 0x8000) != 0) || ((GetAsyncKeyState(0x5C) & 0x8000) != 0);
+        bool shiftDown = (GetAsyncKeyState(0x10) & 0x8000) != 0;
+        bool sDown = (GetAsyncKeyState(0x53) & 0x8000) != 0;
         bool prtScnDown = (GetAsyncKeyState(0x2C) & 0x8000) != 0;
-        if (winDown || prtScnDown) return true;
+        if ((winDown && shiftDown && sDown) || prtScnDown) return true;
 
         IntPtr fg = GetForegroundWindow();
         if (fg != IntPtr.Zero) {
@@ -140,9 +143,6 @@ public static class Win32DesktopBridge {
 
             if (title.IndexOf("Snipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 title.IndexOf("ScreenClipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                title.IndexOf("Screenshot", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                title.IndexOf("ShareX", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                title.IndexOf("Lightshot", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 cls.IndexOf("ScreenClipping", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 cls.IndexOf("Microsoft.ScreenSketch", StringComparison.OrdinalIgnoreCase) >= 0) {
                 return true;
@@ -169,7 +169,7 @@ public static class Win32DesktopBridge {
                             holdActive = true;
                             WriteLineSync("{\\"id\\":0,\\"event\\":\\"screenshot_hold\\",\\"active\\":true}");
                         }
-                    } else if (holdActive && (DateTime.UtcNow - lastTriggerUtc).TotalMilliseconds > 4500) {
+                    } else if (holdActive && (DateTime.UtcNow - lastTriggerUtc).TotalMilliseconds > 1200) {
                         holdActive = false;
                         WriteLineSync("{\\"id\\":0,\\"event\\":\\"screenshot_hold\\",\\"active\\":false}");
                     }
@@ -184,14 +184,20 @@ public static class Win32DesktopBridge {
     public static bool ConfigureCaptureExclusion(long hwndVal, bool exclude) {
         if (hwndVal == 0) return false;
         IntPtr hwnd = new IntPtr(hwndVal);
-        long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
-        if ((exStyle & WS_EX_LAYERED) == 0) {
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(exStyle | WS_EX_LAYERED));
-            SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-        }
-        // Note: SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) is invoked in-process by
-        // Electron's BrowserWindow.setContentProtection(true); we also call it here as a fallback.
         SetWindowDisplayAffinity(hwnd, exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+        return true;
+    }
+
+    public static bool SetDesktopModeWindowFlags(long hwndVal, bool active) {
+        if (hwndVal == 0) return false;
+        IntPtr hwnd = new IntPtr(hwndVal);
+        long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        long nextStyle = active
+            ? (exStyle | WS_EX_NOACTIVATE)
+            : (exStyle & ~WS_EX_NOACTIVATE);
+        if (nextStyle != exStyle) {
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(nextStyle));
+        }
         return true;
     }
 
@@ -238,15 +244,7 @@ public static class Win32DesktopBridge {
         try {
             SetClickThrough(hwnd, true);
             SetCursorPos(x, y);
-
-            POINT pt = new POINT { X = x, Y = y };
-            IntPtr hitWnd = WindowFromPoint(pt);
-            if (hitWnd != IntPtr.Zero && hitWnd != hwnd) {
-                IntPtr rootWnd = GetAncestor(hitWnd, 2); // GA_ROOT
-                if (rootWnd != IntPtr.Zero && rootWnd != hwnd) {
-                    lastTargetWindow = rootWnd;
-                }
-            }
+            mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
 
             uint downFlag = button == "right" ? MOUSEEVENTF_RIGHTDOWN
                           : button == "middle" ? MOUSEEVENTF_MIDDLEDOWN
@@ -256,47 +254,59 @@ public static class Win32DesktopBridge {
                         : MOUSEEVENTF_LEFTUP;
 
             if (action == "click") {
-                if (lastTargetWindow != IntPtr.Zero) {
-                    SetForegroundWindow(lastTargetWindow);
-                }
+                Thread.Sleep(14);
                 mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(6);
+                Thread.Sleep(20);
                 mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(4);
+                Thread.Sleep(32);
             } else if (action == "dblclick") {
-                if (lastTargetWindow != IntPtr.Zero) {
-                    SetForegroundWindow(lastTargetWindow);
-                }
-                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(18);
-                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(6);
-            } else if (action == "drag") {
-                if (lastTargetWindow != IntPtr.Zero) {
-                    SetForegroundWindow(lastTargetWindow);
-                }
-                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
                 Thread.Sleep(10);
-                int steps = 8;
+                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(14);
+                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(28);
+                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(14);
+                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(32);
+            } else if (action == "drag") {
+                Thread.Sleep(16);
+                mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(18);
+                int steps = 14;
                 for (int i = 1; i <= steps; i++) {
                     int ix = x + ((endX - x) * i) / steps;
                     int iy = y + ((endY - y) * i) / steps;
                     SetCursorPos(ix, iy);
                     mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
-                    Thread.Sleep(4);
+                    Thread.Sleep(5);
                 }
+                Thread.Sleep(28);
                 mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
-                Thread.Sleep(6);
+                Thread.Sleep(32);
             } else if (action == "wheel") {
+                Thread.Sleep(8);
                 if (wheelDeltaY != 0) {
                     mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheelDeltaY, UIntPtr.Zero);
                 }
                 if (wheelDeltaX != 0) {
                     mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, wheelDeltaX, UIntPtr.Zero);
                 }
-                Thread.Sleep(3);
+                Thread.Sleep(16);
+            }
+
+            IntPtr fgNow = GetForegroundWindow();
+            if (fgNow != IntPtr.Zero && fgNow != hwnd) {
+                lastTargetWindow = fgNow;
+            } else {
+                POINT pt = new POINT { X = action == "drag" ? endX : x, Y = action == "drag" ? endY : y };
+                IntPtr hitWnd = WindowFromPoint(pt);
+                if (hitWnd != IntPtr.Zero && hitWnd != hwnd) {
+                    IntPtr rootWnd = GetAncestor(hitWnd, 2);
+                    if (rootWnd != IntPtr.Zero && rootWnd != hwnd) {
+                        lastTargetWindow = rootWnd;
+                    }
+                }
             }
         } finally {
             SetClickThrough(hwnd, false);
@@ -339,6 +349,10 @@ while ($null -ne ($line = [Console]::ReadLine())) {
     switch ($cmd.type) {
       'exclude' {
         $ok = [Win32DesktopBridge]::ConfigureCaptureExclusion([long]$cmd.hwnd, [bool]$cmd.exclude)
+        [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $ok }))
+      }
+      'mode_flags' {
+        $ok = [Win32DesktopBridge]::SetDesktopModeWindowFlags([long]$cmd.hwnd, [bool]$cmd.active)
         [Win32DesktopBridge]::WriteLineSync((ConvertTo-Json -Compress @{ id = $id; ok = $ok }))
       }
       'mouse' {
@@ -480,6 +494,10 @@ class NativeDesktopHelper {
 
   async setCaptureExclusion(hwnd, exclude) {
     return this.send({ type: 'exclude', hwnd, exclude: Boolean(exclude) });
+  }
+
+  async setDesktopModeWindowFlags(hwnd, active) {
+    return this.send({ type: 'mode_flags', hwnd, active: Boolean(active) });
   }
 
   async sendMouse(hwnd, event) {
