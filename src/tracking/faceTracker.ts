@@ -8,6 +8,7 @@
  */
 import { CameraError, openCamera } from './camera';
 import type { FaceMeasurement } from './eyeEstimator';
+import { WebcamFrameSanitizer } from './frameSanitizer';
 import type { FromWorker, ToWorker, WorkerFace } from './protocol';
 
 export type TrackerStatus = 'stopped' | 'starting' | 'loading-model' | 'running' | 'error';
@@ -49,6 +50,7 @@ export class FaceTracker {
   private oneShot: ((f: WorkerFace | null) => void) | null = null;
   private captureCanvas: HTMLCanvasElement;
   private captureCtx: CanvasRenderingContext2D;
+  private sanitizer = new WebcamFrameSanitizer();
 
   constructor(private cb: TrackerCallbacks) {
     this.video = document.createElement('video');
@@ -57,7 +59,14 @@ export class FaceTracker {
     this.captureCanvas = document.createElement('canvas');
     this.captureCanvas.width = 640;
     this.captureCanvas.height = 480;
-    this.captureCtx = this.captureCanvas.getContext('2d')!;
+    this.captureCtx = this.captureCanvas.getContext('2d', { willReadFrequently: true })!;
+  }
+
+  /** Returns the de-glitched webcam frame canvas when running. */
+  getPreviewCanvas(): HTMLCanvasElement | null {
+    return this.status === 'running' && this.video.readyState >= 2 && this.video.videoWidth > 0
+      ? this.captureCanvas
+      : null;
   }
 
   private setStatus(s: TrackerStatus, msg?: string) {
@@ -191,6 +200,12 @@ export class FaceTracker {
       this.captureCanvas.height = dh;
     }
     this.captureCtx.drawImage(src, 0, 0, dw, dh);
+    if (src === this.video) {
+      const imgData = this.captureCtx.getImageData(0, 0, dw, dh);
+      if (this.sanitizer.sanitize(imgData) > 0) {
+        this.captureCtx.putImageData(imgData, 0, 0);
+      }
+    }
     createImageBitmap(this.captureCanvas)
       .then((bitmap) => {
         const msg: ToWorker = { type: 'frame', bitmap, t, wantLandmarks: this.wantLandmarks };

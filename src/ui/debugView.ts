@@ -80,7 +80,7 @@ export class DebugView {
     this.previewWrap.classList.toggle('hidden', !showPreview);
   }
 
-  update(t: DebugTelemetry, video: HTMLVideoElement, nowMs: number): void {
+  update(t: DebugTelemetry, previewSource: HTMLCanvasElement | null, nowMs: number): void {
     const { cfg } = t;
     // Throttle DOM text updates to ~15 Hz to avoid layout churn in the render loop
     if (nowMs - this.lastTextUpdate > 65) {
@@ -129,7 +129,7 @@ export class DebugView {
       this.drawFrustumDiagram(t);
     }
     if (cfg.debug.preview) {
-      this.drawPreview(video, t);
+      this.drawPreview(previewSource, t);
     }
   }
 
@@ -240,11 +240,11 @@ export class DebugView {
     ctx.fillText('Screen z=0', 8, 16);
   }
 
-  private drawPreview(video: HTMLVideoElement, t: DebugTelemetry): void {
+  private drawPreview(previewSource: HTMLCanvasElement | null, t: DebugTelemetry): void {
     const ctx = this.previewCtx;
     const W = this.previewCanvas.width;
-    if (video.videoWidth > 0 && video.videoHeight > 0) {
-      const targetH = Math.round((W * video.videoHeight) / video.videoWidth);
+    if (previewSource && previewSource.width > 0 && previewSource.height > 0) {
+      const targetH = Math.round((W * previewSource.height) / previewSource.width);
       if (targetH > 80 && targetH < 260 && this.previewCanvas.height !== targetH) {
         this.previewCanvas.height = targetH;
       }
@@ -252,12 +252,12 @@ export class DebugView {
     const H = this.previewCanvas.height;
     ctx.clearRect(0, 0, W, H);
 
-    if (video.readyState >= 2 && video.videoWidth > 0) {
+    if (previewSource && previewSource.width > 0) {
       // Mirror horizontally so the preview behaves like a mirror
       ctx.save();
       ctx.translate(W, 0);
       ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0, W, H);
+      ctx.drawImage(previewSource, 0, 0, W, H);
       ctx.restore();
     } else {
       ctx.fillStyle = '#0f172a';

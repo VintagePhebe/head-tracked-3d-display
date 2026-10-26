@@ -452,7 +452,7 @@ function animate(nowMs: number): void {
       tracker: tracker.stats,
       cfg,
     },
-    tracker.video,
+    tracker.getPreviewCanvas(),
     nowMs,
   );
 }

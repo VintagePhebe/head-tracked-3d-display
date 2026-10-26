@@ -3,6 +3,7 @@ import {
   STORAGE_KEY, applyMountPreset, defaultConfig, loadConfig, sanitizeConfig, saveConfig, sizeFromDiagonal,
 } from '../src/config/config';
 import { CameraError, classifyCameraError, listCameras, openCamera } from '../src/tracking/camera';
+import { WebcamFrameSanitizer } from '../src/tracking/frameSanitizer';
 import { canvasRect } from '../src/projection/screenGeometry';
 
 class MemStorage {
@@ -163,5 +164,49 @@ describe('camera error handling', () => {
     };
     await expect(openCamera('', md as never)).rejects.toMatchObject({ kind: 'no-camera' });
     expect(await openCamera('camo-1', md as never)).toBe('virtual-stream');
+  });
+
+  it('heals MJPEG-corrupted 8px MCU rows with pink/green blocks and #808080 grey abort tails', () => {
+    const W = 128;
+    const H = 64;
+    const sanitizer = new WebcamFrameSanitizer();
+
+    // Frame 1: clean natural image with texture gradient
+    const f1 = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        f1[i] = (40 + x + y) & 0xff;
+        f1[i + 1] = (90 + x * 2) & 0xff;
+        f1[i + 2] = (70 + y * 2) & 0xff;
+        f1[i + 3] = 255;
+      }
+    }
+    expect(sanitizer.sanitize({ width: W, height: H, data: f1 } as ImageData)).toBe(0);
+
+    // Frame 2: MCU row y=16..23 has garbled pink blocks at x=40..63 and #808080 grey tail at x=64..127
+    const f2 = new Uint8ClampedArray(f1);
+    for (let y = 16; y < 24; y++) {
+      for (let x = 40; x < 64; x++) {
+        const i = (y * W + x) * 4;
+        f2[i] = 250;
+        f2[i + 1] = 80;
+        f2[i + 2] = 220;
+      }
+      for (let x = 64; x < W; x++) {
+        const i = (y * W + x) * 4;
+        f2[i] = 128;
+        f2[i + 1] = 128;
+        f2[i + 2] = 128;
+      }
+    }
+
+    const healed = sanitizer.sanitize({ width: W, height: H, data: f2 } as ImageData);
+    expect(healed).toBeGreaterThanOrEqual(8);
+    // Verify the corrupted MCU row was restored to the clean frame pixels
+    const checkIdx = (20 * W + 80) * 4;
+    expect(f2[checkIdx]).toBe(f1[checkIdx]);
+    expect(f2[checkIdx + 1]).toBe(f1[checkIdx + 1]);
+    expect(f2[checkIdx + 2]).toBe(f1[checkIdx + 2]);
   });
 });
