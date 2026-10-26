@@ -117,8 +117,37 @@ let lastIpdPx = 0;
 const recentMeasurements: FaceMeasurement[] = [];
 const MAX_RECENT = 30;
 const estimatedEyeBuf: Vec3 = v3(0, 0, cfg.eye.defaultDistanceCm / 100);
+const lastRawTrackedEye: Vec3 = v3(0, 0, cfg.eye.defaultDistanceCm / 100);
+let hasRawTrackedEye = false;
+let trackedFramesCount = 0;
 const currentEye: Vec3 = v3(0, 0, cfg.eye.defaultDistanceCm / 100);
 let currentPoseState: PoseState = 'no-data';
+
+function centerPerspective(silent = false): void {
+  const defZ = cfg.eye.defaultDistanceCm / 100;
+  mouseSim.reset();
+  if (hasRawTrackedEye) {
+    cfg.tracking.centerOffsetXCm = Math.round(lastRawTrackedEye.x * 10000) / 100;
+    cfg.tracking.centerOffsetYCm = Math.round(lastRawTrackedEye.y * 10000) / 100;
+    cfg.tracking.centerOffsetZCm = Math.round((lastRawTrackedEye.z - defZ) * 10000) / 100;
+    cfg.tracking.hasCenterOffset = true;
+    saveConfig(window.localStorage, cfg);
+  }
+  poseFilter.reset();
+  currentEye.x = 0;
+  currentEye.y = 0;
+  currentEye.z = defZ;
+  hud.renderDrawer();
+  if (!silent) {
+    hud.showToast(
+      hasRawTrackedEye
+        ? `⊕ Perspective centered! Room axes aligned to your current head position (${cfg.tracking.centerOffsetXCm.toFixed(1)}, ${cfg.tracking.centerOffsetYCm.toFixed(1)} cm).`
+        : '⊕ Perspective reset to center (0, 0).',
+      false,
+      3600,
+    );
+  }
+}
 
 function getCameraModel(): CameraModel {
   return {
@@ -142,8 +171,24 @@ const tracker = new FaceTracker({
     if (recentMeasurements.length > MAX_RECENT) recentMeasurements.shift();
     const est = estimateEye(m, getCameraModel(), estimatedEyeBuf);
     lastIpdPx = est.ipdPx;
-    const chosenEye = selectTargetEye(est, cfg.eye.targetEye);
-    poseFilter.onMeasurement(chosenEye, m.t);
+    const rawEye = selectTargetEye(est, cfg.eye.targetEye);
+    lastRawTrackedEye.x = rawEye.x;
+    lastRawTrackedEye.y = rawEye.y;
+    lastRawTrackedEye.z = rawEye.z;
+    hasRawTrackedEye = true;
+    trackedFramesCount++;
+
+    // Auto-align perspective on first stable head lock if no neutral offset has been captured yet
+    if (!cfg.tracking.hasCenterOffset && trackedFramesCount === 8) {
+      centerPerspective(true);
+    }
+
+    const alignedEye = v3(
+      rawEye.x - cfg.tracking.centerOffsetXCm / 100,
+      rawEye.y - cfg.tracking.centerOffsetYCm / 100,
+      Math.max(0.18, Math.min(2.5, rawEye.z - cfg.tracking.centerOffsetZCm / 100)),
+    );
+    poseFilter.onMeasurement(alignedEye, m.t);
     debugView.setLandmarks(landmarks);
   },
   onNoFace(t) {
@@ -221,7 +266,7 @@ const hud = new AppHud(appEl, {
       document.documentElement.requestFullscreen().catch(() => {});
     }
   },
-  resetMouseEye: () => mouseSim.reset(),
+  resetMouseEye: () => centerPerspective(false),
   getDesktopSources: () => desktopCapture.getSourcesList(),
   getDesktopStats: () => desktopCapture.stats,
   toggleInteractionMode: () => {
@@ -349,9 +394,14 @@ if (!isSmoke) {
   window.setInterval(tryAutoConnectPhysicalCamera, 2500);
 }
 
-// Keyboard shortcuts for 3D App Control Mode (Mode B)
+// Keyboard shortcuts: Alt+Shift+R works globally in both Mode A and Mode B; single-key shortcuts work in Mode B
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (e.altKey && e.shiftKey && e.code === 'KeyR') {
+    e.preventDefault();
+    centerPerspective(false);
+    return;
+  }
   if (desktopInteraction.isDesktopModeActive()) return;
   const k = e.key.toLowerCase();
   if (k === 'f') {
@@ -364,7 +414,7 @@ window.addEventListener('keydown', (e) => {
   } else if (k === 'c') {
     wizard.open();
   } else if (k === 'r') {
-    mouseSim.reset();
+    centerPerspective(false);
   } else if (k === 't') {
     trackingEnabled = !trackingEnabled;
     hud.renderBar();

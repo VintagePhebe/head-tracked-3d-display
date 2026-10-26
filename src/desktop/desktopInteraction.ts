@@ -438,7 +438,7 @@ export class DesktopInteractionController {
     ) {
       return;
     }
-    if (e.code === 'F11') return;
+    if (e.code === 'F11' || (e.altKey && e.shiftKey && e.code === 'KeyR')) return;
 
     if (window.desktopBridge && e.keyCode) {
       e.preventDefault();
@@ -466,7 +466,7 @@ export class DesktopInteractionController {
     ) {
       return;
     }
-    if (e.code === 'F11') return;
+    if (e.code === 'F11' || (e.altKey && e.shiftKey && e.code === 'KeyR')) return;
 
     if (window.desktopBridge && e.keyCode) {
       e.preventDefault();

@@ -200,6 +200,9 @@ export class AppHud {
         <button type="button" class="vw-btn ${tracking && camRunning ? 'active' : ''}" id="hud-track" title="Toggle between Webcam Head Tracking and Mouse Simulation">
           ${tracking ? 'Disable Tracking' : 'Enable Tracking'}
         </button>
+        <button type="button" class="vw-btn" id="hud-center" title="Align all 3D room axes to your current head position [Alt+Shift+R or R]">
+          ⊕ Center View
+        </button>
         <button type="button" class="vw-btn ${isDeskMode ? 'active' : ''}" id="hud-desk-mode" title="Toggle between Mode A (Desktop Interaction) and Mode B (3D App Controls) [${cfg.desktop.shortcut}]">
           ${isDeskMode ? '🖥 Desktop Input: ON' : '🎮 3D App Input'}
         </button>
@@ -231,6 +234,9 @@ export class AppHud {
     });
     q('#hud-track')?.addEventListener('click', () => {
       this.cb.setTrackingEnabled(!tracking);
+    });
+    q('#hud-center')?.addEventListener('click', () => {
+      this.cb.resetMouseEye();
     });
     q('#hud-desk-mode')?.addEventListener('click', () => {
       this.cb.toggleInteractionMode();
@@ -432,6 +438,13 @@ export class AppHud {
         <section class="vw-sec">
           <h4>Tracking Stability &amp; Feel</h4>
           <div class="vw-form-grid">
+            <div class="vw-desk-readout">
+              <span>Neutral Head Alignment: <b>${cfg.tracking.hasCenterOffset ? `X ${cfg.tracking.centerOffsetXCm.toFixed(1)} cm · Y ${cfg.tracking.centerOffsetYCm.toFixed(1)} cm · dZ ${cfg.tracking.centerOffsetZCm.toFixed(1)} cm` : 'Raw Sensor (Unaligned)'}</b></span>
+              <div style="display:flex;gap:6px;margin-top:4px;">
+                <button type="button" class="vw-btn primary" id="set-center-now" style="flex:1">⊕ Center to Current Head</button>
+                <button type="button" class="vw-btn" id="set-center-clear">Raw Axes</button>
+              </div>
+            </div>
             <label>Smoothing (${Math.round(cfg.tracking.smoothing * 100)}%)
               <input type="range" min="0" max="1" step="0.05" id="set-smooth" value="${cfg.tracking.smoothing}" />
             </label>
@@ -502,7 +515,7 @@ export class AppHud {
         </section>
 
         <div class="vw-drawer-actions">
-          <button type="button" class="vw-btn" id="set-recenter">Recenter Mouse Eye (R)</button>
+          <button type="button" class="vw-btn" id="set-recenter">⊕ Center View (Alt+Shift+R)</button>
           <button type="button" class="vw-btn" id="set-defaults">Reset Defaults</button>
         </div>
       </div>
@@ -667,6 +680,20 @@ export class AppHud {
     }
 
     q('#set-recenter')?.addEventListener('click', () => this.cb.resetMouseEye());
+    q('#set-center-now')?.addEventListener('click', () => {
+      this.cb.resetMouseEye();
+      this.renderDrawer();
+    });
+    q('#set-center-clear')?.addEventListener('click', () => {
+      this.cb.updateConfig((c) => {
+        c.tracking.centerOffsetXCm = 0;
+        c.tracking.centerOffsetYCm = 0;
+        c.tracking.centerOffsetZCm = 0;
+        c.tracking.hasCenterOffset = false;
+      });
+      this.renderDrawer();
+      this.showToast('Restored raw webcam sensor axes.', false, 2800);
+    });
     q('#set-defaults')?.addEventListener('click', () => {
       const def = defaultConfig();
       def.calibrated = true;

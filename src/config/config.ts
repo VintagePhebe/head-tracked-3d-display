@@ -56,6 +56,12 @@ export interface AppConfig {
     prediction: boolean;
     /** Lateral motion gain. 1.0 = physically correct; other values exaggerate/attenuate. */
     gain: number;
+    /** Neutral resting head position offset (cm) subtracted so the user's default posture aligns all room axes. */
+    centerOffsetXCm: number;
+    centerOffsetYCm: number;
+    centerOffsetZCm: number;
+    /** Whether a neutral head offset has been captured. */
+    hasCenterOffset: boolean;
   };
   render: {
     quality: Quality;
@@ -128,7 +134,16 @@ export function defaultConfig(): AppConfig {
       hfovDeg: 60,
     },
     eye: { ipdMm: 63, defaultDistanceCm: 60, targetEye: 'cyclopean' },
-    tracking: { smoothing: 0.5, responsiveness: 0.5, prediction: true, gain: 1 },
+    tracking: {
+      smoothing: 0.5,
+      responsiveness: 0.5,
+      prediction: true,
+      gain: 1,
+      centerOffsetXCm: 0,
+      centerOffsetYCm: 0,
+      centerOffsetZCm: 0,
+      hasCenterOffset: false,
+    },
     render: { quality: 'medium', targetFps: 0, scene: 'room', stereo: 'off' },
     debug: { overlay: false, perf: false, view3d: false, preview: false, screenFrame: false },
     desktop: {
@@ -197,6 +212,9 @@ const NUM_RANGES: Record<string, Range> = {
   'tracking.smoothing': [0, 1],
   'tracking.responsiveness': [0, 1],
   'tracking.gain': [0.25, 3],
+  'tracking.centerOffsetXCm': [-200, 200],
+  'tracking.centerOffsetYCm': [-200, 200],
+  'tracking.centerOffsetZCm': [-200, 200],
   'render.targetFps': [0, 360],
   'desktop.depthCm': [20, 250],
   'desktop.widthScale': [0.3, 1.0],
