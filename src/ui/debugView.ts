@@ -243,6 +243,12 @@ export class DebugView {
   private drawPreview(video: HTMLVideoElement, t: DebugTelemetry): void {
     const ctx = this.previewCtx;
     const W = this.previewCanvas.width;
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      const targetH = Math.round((W * video.videoHeight) / video.videoWidth);
+      if (targetH > 80 && targetH < 260 && this.previewCanvas.height !== targetH) {
+        this.previewCanvas.height = targetH;
+      }
+    }
     const H = this.previewCanvas.height;
     ctx.clearRect(0, 0, W, H);
 

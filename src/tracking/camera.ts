@@ -81,9 +81,9 @@ export async function openCamera(deviceId: string, md: MediaDevicesLike | undefi
   }
 
   const video: MediaTrackConstraints = {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 60 },
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 30, max: 30 },
     ...(targetId ? { deviceId: { exact: targetId } } : { facingMode: 'user' }),
   };
   try {

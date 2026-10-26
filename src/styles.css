@@ -340,7 +340,7 @@ html, body {
 .vw-preview-card {
   left: auto;
   right: 12px;
-  bottom: 12px;
+  bottom: 50px;
 }
 
 .vw-frustum-card canvas, .vw-preview-card canvas {

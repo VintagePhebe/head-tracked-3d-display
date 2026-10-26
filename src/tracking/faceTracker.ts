@@ -47,11 +47,17 @@ export class FaceTracker {
   private hzT0 = 0;
   private session = 0;
   private oneShot: ((f: WorkerFace | null) => void) | null = null;
+  private captureCanvas: HTMLCanvasElement;
+  private captureCtx: CanvasRenderingContext2D;
 
   constructor(private cb: TrackerCallbacks) {
     this.video = document.createElement('video');
     this.video.muted = true;
     this.video.playsInline = true;
+    this.captureCanvas = document.createElement('canvas');
+    this.captureCanvas.width = 640;
+    this.captureCanvas.height = 480;
+    this.captureCtx = this.captureCanvas.getContext('2d')!;
   }
 
   private setStatus(s: TrackerStatus, msg?: string) {
@@ -178,7 +184,14 @@ export class FaceTracker {
     this.lastH = h;
     this.lastSubmitWallMs = performance.now();
     const scale = Math.min(1, DETECT_WIDTH / w);
-    createImageBitmap(src, { resizeWidth: Math.round(w * scale), resizeHeight: Math.round(h * scale), resizeQuality: 'medium' })
+    const dw = Math.max(1, Math.round(w * scale));
+    const dh = Math.max(1, Math.round(h * scale));
+    if (this.captureCanvas.width !== dw || this.captureCanvas.height !== dh) {
+      this.captureCanvas.width = dw;
+      this.captureCanvas.height = dh;
+    }
+    this.captureCtx.drawImage(src, 0, 0, dw, dh);
+    createImageBitmap(this.captureCanvas)
       .then((bitmap) => {
         const msg: ToWorker = { type: 'frame', bitmap, t, wantLandmarks: this.wantLandmarks };
         this.worker?.postMessage(msg, [bitmap]);

@@ -91,6 +91,9 @@ async function captureWindowScreenshot() {
   }
 }
 
+// Avoid Windows 11 hybrid-GPU D3D11 NV12 webcam stride/chroma corruption (cyan tint, scanline tears, bottom grey padding bar)
+app.commandLine.appendSwitch('disable-features', 'MediaFoundationD3D11VideoCapture,ZeroCopyVideoCapture');
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'app',
