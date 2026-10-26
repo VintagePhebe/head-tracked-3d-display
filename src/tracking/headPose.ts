@@ -4,7 +4,10 @@
  *
  *  - One Euro smoothing per axis (depth smoothed a little more: it is the noisiest axis).
  *  - Optional latency compensation: linear extrapolation from the capture time to "now"
- *    using the filtered velocity, clamped to a short horizon.
+ *    using the filtered velocity, clamped to a short horizon. Gated by head speed so that
+ *    velocity noise never makes a still view wiggle.
+ *  - Render-rate exponential smoothing (slow when still, fast when moving) so the view
+ *    moves continuously between camera frames instead of in 30 Hz steps.
  *  - Tracking loss: hold the last pose briefly, then ease back to the default viewing
  *    position. Recovery blends from the displayed pose to the tracked pose (no snapping).
  */
@@ -25,6 +28,10 @@ export interface HeadPoseParams {
   gain: number;
   /** Eyes are never allowed closer than this to the screen plane (metres). */
   minDistance: number;
+  /** Render-rate smoothing time constant while the head is still (ms): kills residual jitter. */
+  stillTauMs: number;
+  /** Render-rate smoothing time constant while the head moves (ms): removes 30 Hz stair-stepping. */
+  moveTauMs: number;
 }
 
 export const DEFAULT_POSE_PARAMS: HeadPoseParams = {
@@ -36,9 +43,14 @@ export const DEFAULT_POSE_PARAMS: HeadPoseParams = {
   prediction: true,
   gain: 1,
   minDistance: 0.08,
+  stillTauMs: 160,
+  moveTauMs: 18,
 };
 
-const Z_SMOOTHING_FACTOR = 0.7; // depth cutoff multiplier
+const Z_SMOOTHING_FACTOR = 0.35; // depth cutoff multiplier (IPD-derived depth is ~4x noisier than X/Y)
+/** Head speed (m/s) below which the head counts as still, and above which as fully moving. */
+const STILL_SPEED = 0.035;
+const MOVE_SPEED = 0.16;
 
 const smoothstep = (k: number) => {
   const c = Math.min(1, Math.max(0, k));
@@ -63,6 +75,9 @@ export class HeadPoseFilter {
   private holdFrom: Vec3 = { x: 0, y: 0, z: 0 };
   private blendFrom: Vec3 = { x: 0, y: 0, z: 0 };
   private tracked: Vec3 = { x: 0, y: 0, z: 0 };
+  private smoothed: Vec3 = { x: 0, y: 0, z: 0 };
+  private smoothValid = false;
+  private lastSampleT = 0;
   private hasData = false;
   private inLoss = false;
   private lostSince: number | null = null;
@@ -82,7 +97,11 @@ export class HeadPoseFilter {
   setFilterParams(p: OneEuroParams): void {
     this.fx.params = { ...p };
     this.fy.params = { ...p };
-    this.fz.params = { ...p, minCutoff: p.minCutoff * Z_SMOOTHING_FACTOR };
+    this.fz.params = {
+      ...p,
+      minCutoff: p.minCutoff * Z_SMOOTHING_FACTOR,
+      beta: p.beta * Z_SMOOTHING_FACTOR,
+    };
   }
 
   setDefaultEye(e: Vec3): void {
@@ -94,6 +113,7 @@ export class HeadPoseFilter {
     this.hasData = false;
     this.inLoss = false;
     this.lostSince = null;
+    this.smoothValid = false;
     this.fx.reset(); this.fy.reset(); this.fz.reset();
   }
 
@@ -104,6 +124,7 @@ export class HeadPoseFilter {
       this.fx.reset(); this.fy.reset(); this.fz.reset();
       copyInto(this.blendFrom, this.display);
       this.blendStart = tMs;
+      this.smoothValid = false;
     }
     const s = tMs / 1000;
     const g = this.params.gain;
@@ -148,20 +169,40 @@ export class HeadPoseFilter {
         }
       } else {
         copyInto(this.tracked, this.filtered);
-        if (p.prediction) {
-          const h = Math.min(Math.max(nowMs - this.lastMeasT, 0), p.maxPredictMs) / 1000;
+        // 0 = head still, 1 = clearly moving. Gates prediction (velocity noise would otherwise
+        // make a still view wiggle) and picks the render-rate smoothing time constant.
+        const speed = Math.hypot(this.fx.velocity, this.fy.velocity, this.fz.velocity * 0.5);
+        const motion = smoothstep((speed - STILL_SPEED) / (MOVE_SPEED - STILL_SPEED));
+        const tau = p.stillTauMs + (p.moveTauMs - p.stillTauMs) * motion;
+        if (p.prediction && motion > 0) {
+          // Extrapolate over pipeline latency plus the render smoother's own lag (v * tau).
+          const h = ((Math.min(Math.max(nowMs - this.lastMeasT, 0), p.maxPredictMs) + tau) / 1000) * motion;
           this.tracked.x += this.fx.velocity * h;
           this.tracked.y += this.fy.velocity * h;
           this.tracked.z += this.fz.velocity * h;
         }
+        // Render-rate exponential smoothing: turns ~30 Hz measurement steps into continuous motion.
+        if (this.smoothValid) {
+          const dtSample = Math.max(0, nowMs - this.lastSampleT);
+          const axy = 1 - Math.exp(-dtSample / Math.max(1, tau));
+          const tauZ = tau * (2 - motion);
+          const az = 1 - Math.exp(-dtSample / Math.max(1, tauZ));
+          this.smoothed.x += (this.tracked.x - this.smoothed.x) * axy;
+          this.smoothed.y += (this.tracked.y - this.smoothed.y) * axy;
+          this.smoothed.z += (this.tracked.z - this.smoothed.z) * az;
+        } else {
+          copyInto(this.smoothed, this.tracked);
+          this.smoothValid = true;
+        }
         const k = (nowMs - this.blendStart) / p.recoverMs;
-        if (k < 1) lerpInto(out, this.blendFrom, this.tracked, smoothstep(k));
-        else copyInto(out, this.tracked);
+        if (k < 1) lerpInto(out, this.blendFrom, this.smoothed, smoothstep(k));
+        else copyInto(out, this.smoothed);
         state = 'tracking';
       }
     }
     if (out.z < p.minDistance) out.z = p.minDistance;
     copyInto(this.display, out);
+    this.lastSampleT = nowMs;
     return state;
   }
 }

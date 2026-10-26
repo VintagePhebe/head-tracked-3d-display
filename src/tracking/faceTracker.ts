@@ -154,11 +154,12 @@ export class FaceTracker {
   }
 
   private scheduleFrame(session: number) {
-    this.frameCb = this.video.requestVideoFrameCallback((now, meta) => {
+    this.frameCb = this.video.requestVideoFrameCallback(() => {
       if (session !== this.session) return;
-      if (!this.busy && this.video.videoWidth > 0) {
-        const t = meta.captureTime ?? now;
-        this.submit(this.video, this.video.videoWidth, this.video.videoHeight, t);
+      if (!this.busy && this.video.videoWidth > 0 && this.video.currentTime !== this.lastVideoTime) {
+        // Same clock as tick() (performance.now base): mixing captureTime with wall time
+        // produced out-of-order / uneven timestamps that made the pose filter jitter.
+        this.submit(this.video, this.video.videoWidth, this.video.videoHeight, performance.now());
       }
       this.scheduleFrame(session);
     });
@@ -179,9 +180,7 @@ export class FaceTracker {
     if (this.video.readyState >= 2 && this.video.videoWidth > 0) {
       const vt = this.video.currentTime;
       if (vt !== this.lastVideoTime && nowMs - this.lastSubmitWallMs >= 12) {
-        this.lastVideoTime = vt;
-        this.lastSubmitWallMs = nowMs;
-        this.submit(this.video, this.video.videoWidth, this.video.videoHeight, nowMs);
+        this.submit(this.video, this.video.videoWidth, this.video.videoHeight, performance.now());
       }
     }
   }
@@ -192,6 +191,9 @@ export class FaceTracker {
     this.lastW = w;
     this.lastH = h;
     this.lastSubmitWallMs = performance.now();
+    if (src === this.video) {
+      this.lastVideoTime = this.video.currentTime;
+    }
     const scale = Math.min(1, DETECT_WIDTH / w);
     const dw = Math.max(1, Math.round(w * scale));
     const dh = Math.max(1, Math.round(h * scale));

@@ -12,6 +12,9 @@ declare const self: DedicatedWorkerGlobalScope;
 
 let landmarker: FaceLandmarker | null = null;
 let lastTs = 0;
+let lastFaceTs = -Infinity;
+let smoothAxis: { x: number; y: number; z: number } | null = null;
+const AXIS_ALPHA = 0.25;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
 
 async function init(wasmBase: string, modelUrl: string) {
@@ -53,6 +56,7 @@ function detect(bitmap: ImageBitmap, t: number, wantLandmarks: boolean) {
     const detectMs = performance.now() - t0;
     const lm = res.faceLandmarks[0];
     if (!lm) {
+      smoothAxis = null;
       post({ type: 'result', t, face: null, detectMs });
       return;
     }
@@ -66,6 +70,23 @@ function detect(bitmap: ImageBitmap, t: number, wantLandmarks: boolean) {
       }
     }
     const matData = res.facialTransformationMatrixes?.[0]?.data;
+    const rawAxis = eyeAxisFromMatrix(matData);
+    let eyeAxis = rawAxis;
+    let foreshortening = foreshorteningFromMatrix(matData);
+    if (rawAxis) {
+      if (!smoothAxis || ts - lastFaceTs > 250) {
+        smoothAxis = { x: rawAxis.x, y: rawAxis.y, z: rawAxis.z };
+      } else {
+        const x = smoothAxis.x + AXIS_ALPHA * (rawAxis.x - smoothAxis.x);
+        const y = smoothAxis.y + AXIS_ALPHA * (rawAxis.y - smoothAxis.y);
+        const z = smoothAxis.z + AXIS_ALPHA * (rawAxis.z - smoothAxis.z);
+        const len = Math.hypot(x, y, z) || 1;
+        smoothAxis = { x: x / len, y: y / len, z: z / len };
+      }
+      eyeAxis = smoothAxis;
+      foreshortening = Math.hypot(smoothAxis.x, smoothAxis.y);
+    }
+    lastFaceTs = ts;
     post(
       {
         type: 'result',
@@ -74,8 +95,8 @@ function detect(bitmap: ImageBitmap, t: number, wantLandmarks: boolean) {
         face: {
           rightEye: mid(EYE_LANDMARKS.rightOuter, EYE_LANDMARKS.rightInner),
           leftEye: mid(EYE_LANDMARKS.leftInner, EYE_LANDMARKS.leftOuter),
-          foreshortening: foreshorteningFromMatrix(matData),
-          eyeAxis: eyeAxisFromMatrix(matData),
+          foreshortening,
+          eyeAxis,
           landmarks,
         },
       },

@@ -137,6 +137,30 @@ describe('HeadPoseFilter', () => {
     expect(run(true)).toBeLessThan(run(false) * 0.6);
   });
 
+  it('keeps a still head steady at render rate despite landmark noise', () => {
+    // 30 Hz measurements with ±2 mm lateral / ±8 mm depth noise, sampled at 120 Hz render rate.
+    const h = new HeadPoseFilter(DEFAULT_EYE, filt);
+    const n = rng(3);
+    const out = v3(0, 0, 0);
+    let prev: Vec3 | null = null;
+    let maxStep = 0;
+    let nextMeas = 0;
+    for (let t = 0; t <= 6000; t += 1000 / 120) {
+      while (nextMeas <= t) {
+        h.onMeasurement(v3(0.05 + n() * 0.004, 0.02 + n() * 0.004, 0.6 + n() * 0.016), nextMeas);
+        nextMeas += 33;
+      }
+      h.sample(t, out);
+      if (t > 1000 && prev) {
+        maxStep = Math.max(maxStep, Math.abs(out.x - prev.x), Math.abs(out.y - prev.y), Math.abs(out.z - prev.z));
+      }
+      prev = { ...out };
+    }
+    // Frame-to-frame motion of a still head stays sub-0.1 mm (no visible wiggle).
+    expect(maxStep).toBeLessThan(0.0001);
+    expect(out.x).toBeCloseTo(0.05, 2);
+  });
+
   it('applies lateral gain and clamps the eye in front of the screen', () => {
     const h = new HeadPoseFilter(DEFAULT_EYE, filt, { gain: 2, minDistance: 0.08 });
     feed(h, v3(0.1, 0.05, 0.01), 0, 3000);

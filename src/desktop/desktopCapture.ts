@@ -82,7 +82,6 @@ export class DesktopCaptureManager {
   private freezeCtx: CanvasRenderingContext2D;
   private freezeTexture: THREE.CanvasTexture;
   private screenshotHold = false;
-  private lastFreezeSnapMs = 0;
   private stream: MediaStream | null = null;
   private sources: DesktopDisplaySource[] = [];
   private activeSource: DesktopDisplaySource | null = null;
@@ -367,10 +366,6 @@ export class DesktopCaptureManager {
    */
   tick(nowMs: number): void {
     if (!this.stats.active) return;
-    if (!this.screenshotHold && nowMs - this.lastFreezeSnapMs > 400) {
-      this.lastFreezeSnapMs = nowMs;
-      this.captureCleanFrameToCanvas();
-    }
     if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
       if (
         this.stats.width !== this.video.videoWidth ||
